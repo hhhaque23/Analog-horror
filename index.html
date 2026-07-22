@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DEAD AIR — WKRX-TV</title>
+<style>
+  :root{
+    --phosphor:#c8ffc8;
+    --amber:#ffb000;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{
+    width:100%;height:100%;
+    background:#050505;
+    overflow:hidden;
+    font-family:"Courier New",Courier,monospace;
+    cursor:crosshair;
+  }
+  #stage{
+    position:absolute;inset:0;
+    display:flex;align-items:center;justify-content:center;
+  }
+  #tv{
+    position:relative;
+    width:min(96vw,calc(96vh*1.3333));
+    aspect-ratio:4/3;
+    background:#000;
+    border-radius:2.5% / 3.5%;
+    box-shadow:0 0 120px rgba(40,60,40,.25), inset 0 0 80px rgba(0,0,0,.9);
+    overflow:hidden;
+  }
+  canvas#screen{
+    position:absolute;inset:0;
+    width:100%;height:100%;
+    image-rendering:pixelated;
+  }
+  /* CRT overlays */
+  #scanlines{
+    position:absolute;inset:0;pointer-events:none;z-index:5;
+    background:repeating-linear-gradient(
+      to bottom,
+      rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px,
+      rgba(0,0,0,.28) 3px, rgba(0,0,0,.28) 4px);
+    mix-blend-mode:multiply;
+  }
+  #vignette{
+    position:absolute;inset:0;pointer-events:none;z-index:6;
+    background:radial-gradient(ellipse at center,
+      rgba(0,0,0,0) 55%, rgba(0,0,0,.55) 92%, rgba(0,0,0,.9) 100%);
+  }
+  #curve{
+    position:absolute;inset:0;pointer-events:none;z-index:7;
+    background:radial-gradient(ellipse at 50% 38%,
+      rgba(255,255,255,.05) 0%, rgba(255,255,255,0) 60%);
+  }
+  #flicker{
+    position:absolute;inset:0;pointer-events:none;z-index:8;
+    background:#fff;opacity:0;
+  }
+  #osd{
+    position:absolute;left:4%;top:5%;z-index:9;pointer-events:none;
+    color:var(--phosphor);
+    font-size:clamp(10px,2.4vh,22px);
+    font-weight:bold;
+    text-shadow:0 0 6px rgba(120,255,120,.8), 2px 0 0 rgba(255,0,0,.25), -2px 0 0 rgba(0,80,255,.25);
+    letter-spacing:.12em;
+    white-space:pre;
+  }
+  #osdclock{
+    position:absolute;right:4%;top:5%;z-index:9;pointer-events:none;
+    color:var(--phosphor);
+    font-size:clamp(10px,2.4vh,22px);
+    font-weight:bold;
+    text-shadow:0 0 6px rgba(120,255,120,.8);
+    letter-spacing:.12em;
+  }
+  #subtitle{
+    position:absolute;left:0;right:0;bottom:7%;z-index:9;pointer-events:none;
+    text-align:center;
+    color:#e8e8e8;
+    font-size:clamp(11px,2.6vh,24px);
+    text-shadow:0 0 8px rgba(0,0,0,.9),0 0 2px #000;
+    letter-spacing:.06em;
+    padding:0 8%;
+  }
+  #trackbar{
+    position:absolute;left:0;right:0;bottom:2.5%;z-index:9;pointer-events:none;
+    text-align:center;
+    color:var(--amber);
+    font-size:clamp(10px,2.2vh,20px);
+    text-shadow:0 0 6px rgba(255,176,0,.7);
+    letter-spacing:.15em;
+  }
+  .hidden{display:none !important;}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="tv">
+    <canvas id="screen" width="640" height="480"></canvas>
+    <div id="scanlines"></div>
+    <div id="vignette"></div>
+    <div id="curve"></div>
+    <div id="flicker"></div>
+    <div id="osd"></div>
+    <div id="osdclock"></div>
+    <div id="subtitle"></div>
+    <div id="trackbar"></div>
+  </div>
+</div>
+<script>
+"use strict";
+/* ============================================================
+   DEAD AIR — an analog horror game
+   You are the overnight master-control operator at WKRX-TV.
+   Keep the signal clean until sunrise. Something is inside it.
+   ============================================================ */
+
+const W = 640, H = 480;
+const cv = document.getElementById("screen");
+const cx = cv.getContext("2d");
+const osd = document.getElementById("osd");
+const osdclock = document.getElementById("osdclock");
+const subEl = document.getElementById("subtitle");
+const trackEl = document.getElementById("trackbar");
+const flickerEl = document.getElementById("flicker");
+
+/* ---------- utility ---------- */
+const rnd = (a=1,b) => b===undefined ? Math.random()*a : a+Math.random()*(b-a);
+const ri = (a,b) => Math.floor(rnd(a,b+1));
+const clamp = (v,a,b) => v<a?a:v>b?b:v;
+const pick = arr => arr[Math.floor(Math.random()*arr.length)];
+
+/* ---------- audio (all procedural, WebAudio) ---------- */
+let AC=null, master=null, humOsc=null, humGain=null;
+let staticSrc=null, staticGain=null, droneOsc=null, droneGain=null;
+function initAudio(){
+  if(AC) return;
+  AC = new (window.AudioContext||window.webkitAudioContext)();
+  master = AC.createGain(); master.gain.value = 0.7; master.connect(AC.destination);
+
+  // 60 Hz mains hum + faint 120 Hz harmonic
+  humOsc = AC.createOscillator(); humOsc.type="sine"; humOsc.frequency.value=60;
+  const hum2 = AC.createOscillator(); hum2.type="sine"; hum2.frequency.value=120;
+  humGain = AC.createGain(); humGain.gain.value=0.012;
+  const hum2g = AC.createGain(); hum2g.gain.value=0.005;
+  humOsc.connect(humGain).connect(master);
+  hum2.connect(hum2g).connect(master);
+  humOsc.start(); hum2.start();
+
+  // looping white-noise bed for static
+  const len = AC.sampleRate*2;
+  const buf = AC.createBuffer(1,len,AC.sampleRate);
+  const d = buf.getChannelData(0);
+  for(let i=0;i<len;i++) d[i]=Math.random()*2-1;
+  staticSrc = AC.createBufferSource(); staticSrc.buffer=buf; staticSrc.loop=true;
+  const flt = AC.createBiquadFilter(); flt.type="bandpass"; flt.frequency.value=2400; flt.Q.value=0.4;
+  staticGain = AC.createGain(); staticGain.gain.value=0.0;
+  staticSrc.connect(flt).connect(staticGain).connect(master);
+  staticSrc.start();
+
+  // low dread drone (rises as the entity gets close)
+  droneOsc = AC.createOscillator(); droneOsc.type="sawtooth"; droneOsc.frequency.value=38;
+  const dflt = AC.createBiquadFilter(); dflt.type="lowpass"; dflt.frequency.value=140;
+  droneGain = AC.createGain(); droneGain.gain.value=0.0;
+  droneOsc.connect(dflt).connect(droneGain).connect(master);
+  droneOsc.start();
+}
+function setStaticLevel(v){ if(staticGain) staticGain.gain.setTargetAtTime(v, AC.currentTime, .08); }
+function setDroneLevel(v){ if(droneGain) droneGain.gain.setTargetAtTime(v, AC.currentTime, .3); }
+function beep(freq=1000,dur=.12,vol=.15,type="square"){
+  if(!AC) return;
+  const o=AC.createOscillator(),g=AC.createGain();
+  o.type=type;o.frequency.value=freq;
+  g.gain.setValueAtTime(vol,AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(.0001,AC.currentTime+dur);
+  o.connect(g).connect(master);o.start();o.stop(AC.currentTime+dur);
+}
+function stinger(){ // discordant hit for scares
+  if(!AC) return;
+  for(const f of [66,71,199,313]){
+    const o=AC.createOscillator(),g=AC.createGain();
+    o.type="sawtooth";o.frequency.setValueAtTime(f*2,AC.currentTime);
+    o.frequency.exponentialRampToValueAtTime(f*.5,AC.currentTime+1.2);
+    g.gain.setValueAtTime(.22,AC.currentTime);
+    g.gain.exponentialRampToValueAtTime(.0001,AC.currentTime+1.4);
+    o.connect(g).connect(master);o.start();o.stop(AC.currentTime+1.5);
+  }
+  const n=AC.createBufferSource();n.buffer=staticSrc.buffer;
+  const g=AC.createGain();g.gain.setValueAtTime(.5,AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(.0001,AC.currentTime+1.2);
+  n.connect(g).connect(master);n.start();n.stop(AC.currentTime+1.2);
+}
+function easTone(on){
+  if(!AC) return;
+  if(on && !easTone.o){
+    const o1=AC.createOscillator(),o2=AC.createOscillator(),g=AC.createGain();
+    o1.type="sine";o1.frequency.value=853;
+    o2.type="sine";o2.frequency.value=960;
+    g.gain.value=.06;
+    o1.connect(g);o2.connect(g);g.connect(master);
+    o1.start();o2.start();
+    easTone.o=[o1,o2];
+  }else if(!on && easTone.o){
+    easTone.o.forEach(o=>o.stop());easTone.o=null;
+  }
+}
+function phoneRingTone(){
+  if(!AC) return;
+  let t=AC.currentTime;
+  for(let r=0;r<2;r++){
+    const o=AC.createOscillator(),g=AC.createGain();
+    o.type="square";o.frequency.value=440+r*40;
+    g.gain.setValueAtTime(0,t);
+    for(let k=0;k<10;k++){
+      g.gain.setValueAtTime(.08,t+k*.08);
+      g.gain.setValueAtTime(0,t+k*.08+.04);
+    }
+    o.connect(g).connect(master);o.start(t);o.stop(t+1);
+  }
+}
+
+/* ---------- game state ---------- */
+const ST = { MENU:0, INTRO:1, PLAY:2, EAS:3, PHONE:4, SCARE:5, DEAD:6, WIN:7 };
+let state = ST.MENU;
+let stateT = 0;             // seconds in current state
+let gameMin = 0;            // minutes since 12:00 AM (1 real sec = 1 game min)
+const NIGHT_END = 360;      // 6:00 AM
+let channel = 1;
+let anomalies = {};         // ch -> {age}
+let strikes = 0;
+let tracking = false;
+let trackProgress = 0;
+let threat = 0;             // 0..1, drives dread + entity closeness
+let scareT = 0, deadT = 0, winT = 0;
+let easDone=false, phoneDone=false, buttonsCorrupt=false, blackoutDone=false;
+let phoneRingT = -1;
+let sub = "", subT = 0;
+let noiseBurst = 0;         // visual disruption impulse
+let shake = 0;
+let logLines = [];
+
+function say(text, dur=4){ sub=text; subT=dur; }
+function addLog(s){ logLines.push(s); if(logLines.length>4) logLines.shift(); }
+
+/* ---------- input ---------- */
+const keys = {};
+window.addEventListener("keydown", e=>{
+  if(e.repeat) return;
+  keys[e.code]=true;
+  if(state===ST.MENU){ startIntro(); return; }
+  if(state===ST.INTRO && stateT>2){ startNight(); return; }
+  if(state===ST.DEAD && deadT>4){ resetToMenu(); return; }
+  if(state===ST.WIN && winT>6){ resetToMenu(); return; }
+  if(state===ST.PLAY||state===ST.EAS||state===ST.PHONE){
+    const n = parseInt(e.key,10);
+    if(n>=1&&n<=6&&state===ST.PLAY){ switchChannel(n); }
+    if(e.code==="Space"){ tracking=true; }
+    if(e.code==="KeyE" && state===ST.PHONE && phoneRingT>=0){ answerPhone(); }
+  }
+});
+window.addEventListener("keyup", e=>{
+  keys[e.code]=false;
+  if(e.code==="Space"){ tracking=false; trackProgress=Math.max(0,trackProgress-0.4); }
+});
+window.addEventListener("pointerdown", ()=>{
+  initAudio();
+  if(AC.state==="suspended") AC.resume();
+  if(state===ST.MENU) startIntro();
+  else if(state===ST.INTRO && stateT>2) startNight();
+  else if(state===ST.DEAD && deadT>4) resetToMenu();
+  else if(state===ST.WIN && winT>6) resetToMenu();
+});
+
+function switchChannel(n){
+  if(n===channel) return;
+  channel=n;
+  noiseBurst=Math.max(noiseBurst,.9);
+  beep(1200,.05,.08);
+  setStaticLevel(.16);
+  setTimeout(()=>{ if(state===ST.PLAY) updateStaticBed(); },140);
+}
+
+/* ---------- flow ---------- */
+function startIntro(){ initAudio(); state=ST.INTRO; stateT=0; }
+function startNight(){
+  state=ST.PLAY; stateT=0; gameMin=0; channel=1;
+  anomalies={}; strikes=0; threat=0; tracking=false; trackProgress=0;
+  easDone=phoneDone=buttonsCorrupt=blackoutDone=false;
+  phoneRingT=-1; logLines=[];
+  say("Shift start. Keep every channel clean until 6 AM.",5);
+  addLog("00:00 SHIFT START — OP #7 ON DUTY");
+  updateStaticBed();
+}
+function resetToMenu(){ state=ST.MENU; stateT=0; easTone(false); setStaticLevel(0); setDroneLevel(0); }
+function updateStaticBed(){
+  const base = channel===6 ? .10 : .02;
+  setStaticLevel(base + threat*.05 + (anomalies[channel]?.03:0));
+}
+
+/* ---------- anomaly system ---------- */
+let nextAnomalyIn = 18;
+function spawnAnomaly(){
+  const candidates=[1,2,3,4,5].filter(c=>!anomalies[c]);
+  if(!candidates.length) return;
+  const ch=pick(candidates);
+  anomalies[ch]={age:0, kind:pick(["figure","face","text","invert"])};
+  beep(300,.3,.05,"sine");
+  addLog(fmtClock()+" ANOMALY CH-"+ch);
+}
+function anomalyTick(dt){
+  const hour = gameMin/60;
+  nextAnomalyIn -= dt;
+  const interval = clamp(20-hour*2.6, 7, 20);
+  if(nextAnomalyIn<=0){ spawnAnomaly(); nextAnomalyIn = interval*rnd(.75,1.25); }
+
+  for(const chS of Object.keys(anomalies)){
+    const ch=+chS, a=anomalies[ch];
+    a.age += dt;
+    if(a.age>26 && a.age-dt<=26){ say("SIGNAL DEGRADATION CRITICAL — CH "+ch,3); beep(220,.5,.1,"sawtooth"); }
+    if(a.age>38){
+      delete anomalies[ch];
+      strikes++;
+      noiseBurst=1; shake=1;
+      stinger();
+      addLog(fmtClock()+" CONTAINMENT FAILURE ("+strikes+"/3)");
+      say(strikes<3 ? "IT MOVED CLOSER." : "", 3);
+      if(strikes>=3){ triggerScare(); return; }
+    }
+  }
+  threat = clamp(hour/6*.5 + strikes*.18 + Object.keys(anomalies).length*.06, 0, 1);
+  setDroneLevel(threat*.10);
+
+  // tracking clears the anomaly on the current channel
+  if(tracking && anomalies[channel] && state===ST.PLAY){
+    trackProgress += dt/2.6;
+    setStaticLevel(.2);
+    if(trackProgress>=1){
+      delete anomalies[channel];
+      trackProgress=0; noiseBurst=.8;
+      beep(1600,.1,.1); beep(2100,.12,.1);
+      addLog(fmtClock()+" CH-"+channel+" RESTORED");
+      say("Signal restored.",2);
+      updateStaticBed();
+    }
+  } else if(!tracking && trackProgress>0){
+    trackProgress=Math.max(0,trackProgress-dt*.5);
+  }
+  if(!tracking) updateStaticBed();
+}
+
+/* ---------- scripted events ---------- */
+function scriptTick(){
+  if(gameMin>=60 && !easDone){ easDone=true; state=ST.EAS; stateT=0; easTone(true); }
+  if(gameMin>=150 && !phoneDone){ phoneDone=true; state=ST.PHONE; stateT=0; phoneRingT=0; }
+  if(gameMin>=185 && !buttonsCorrupt){ buttonsCorrupt=true; if(channel===5) say("…did Mr. Buttons just look at you?",4); }
+  if(gameMin>=250 && !blackoutDone){
+    blackoutDone=true; noiseBurst=1; shake=.6; stinger();
+    say("ALL FEEDS DROPPED — 4:10 AM", 4);
+    for(const c of [1,2,3]) if(!anomalies[c]) anomalies[c]={age:0,kind:"figure"};
+    addLog("04:10 MULTIPLE INTRUSIONS");
+  }
+  if(gameMin>=NIGHT_END){ state=ST.WIN; winT=0; easTone(false); setDroneLevel(0); setStaticLevel(.02); }
+}
+function answerPhone(){
+  phoneRingT=-1;
+  state=ST.PLAY;
+  const lines=[
+    "“You shouldn't be there tonight.”",
+    "“It learned the schedule. It knows when you blink.”",
+    "“The last operator is still on channel six.”",
+  ];
+  let i=0;
+  say(lines[0],4); beep(90,.8,.06,"sine");
+  const iv=setInterval(()=>{
+    i++;
+    if(i<lines.length && state===ST.PLAY){ say(lines[i],4); beep(90,.8,.06,"sine"); }
+    else clearInterval(iv);
+  },4500);
+  addLog(fmtClock()+" INBOUND CALL — LINE 1");
+}
+function triggerScare(){
+  state=ST.SCARE; scareT=0; stinger(); setStaticLevel(.5); setDroneLevel(.3);
+  flickerEl.style.opacity=.9;
+  setTimeout(()=>flickerEl.style.opacity=0,90);
+}
+
+/* ---------- drawing helpers ---------- */
+function drawStatic(alpha=1, coarse=3){
+  const img=cx.createImageData(W,H);
+  const d=img.data;
+  for(let y=0;y<H;y+=coarse){
+    for(let x=0;x<W;x+=coarse){
+      const v=Math.random()*255|0;
+      for(let dy=0;dy<coarse&&y+dy<H;dy++)for(let dx=0;dx<coarse&&x+dx<W;dx++){
+        const i=((y+dy)*W+(x+dx))*4;
+        d[i]=d[i+1]=d[i+2]=v; d[i+3]=255*alpha;
+      }
+    }
+  }
+  cx.putImageData(img,0,0);
+}
+function text(t,x,y,size=20,color="#cfc",align="left",font="bold "){
+  cx.font=font+size+"px 'Courier New',monospace";
+  cx.fillStyle=color;cx.textAlign=align;cx.textBaseline="top";
+  cx.fillText(t,x,y);
+}
+function fmtClock(){
+  const m=Math.floor(gameMin);
+  let h=Math.floor(m/60); const mm=(m%60).toString().padStart(2,"0");
+  const disp=(h===0?12:h);
+  return (disp+":"+mm+" AM");
+}
+function trackingLines(strength){
+  // horizontal VHS tracking tear bands
+  const n = 1+Math.floor(strength*4);
+  for(let i=0;i<n;i++){
+    const y=ri(0,H-14), hgt=ri(3,12), off=ri(-30,30)*strength;
+    const band=cx.getImageData(0,y,W,hgt);
+    cx.putImageData(band,off,y);
+    cx.fillStyle="rgba(255,255,255,"+(0.04+strength*.08)+")";
+    cx.fillRect(0,y,W,1);
+  }
+}
+function drawFigure(x, y, scale, dark=.92){
+  // wobbling humanoid silhouette
+  cx.save();
+  cx.translate(x,y); cx.scale(scale,scale);
+  cx.fillStyle="rgba(3,3,3,"+dark+")";
+  const w=t=>Math.sin(performance.now()/90+t)*2.2;
+  cx.beginPath();
+  cx.ellipse(0+w(0),-88,13,17,0,0,7);            // head
+  cx.fill();
+  cx.beginPath();
+  cx.moveTo(-16+w(1),-72); cx.lineTo(16+w(2),-72);
+  cx.lineTo(22+w(3),20); cx.lineTo(10,150); cx.lineTo(4,150);
+  cx.lineTo(0+w(4),30); cx.lineTo(-4,150); cx.lineTo(-10,150);
+  cx.lineTo(-22+w(5),20); cx.closePath(); cx.fill();
+  // too-long arms
+  cx.strokeStyle="rgba(3,3,3,"+dark+")"; cx.lineWidth=7; cx.lineCap="round";
+  cx.beginPath(); cx.moveTo(-18,-60); cx.quadraticCurveTo(-34+w(6)*3,10,-30,95); cx.stroke();
+  cx.beginPath(); cx.moveTo(18,-60); cx.quadraticCurveTo(34+w(7)*3,10,30,95); cx.stroke();
+  cx.restore();
+}
+function drawScareFace(t){
+  // procedurally distorted face, full screen
+  cx.fillStyle="#000"; cx.fillRect(0,0,W,H);
+  const jx=rnd(-14,14), jy=rnd(-10,10);
+  cx.save(); cx.translate(W/2+jx,H/2+jy);
+  const s=1+t*.35+Math.sin(t*40)*.03;
+  cx.scale(s,s*(1+Math.sin(t*23)*.08));
+  // skin
+  cx.fillStyle="#d9cfc0";
+  cx.beginPath(); cx.ellipse(0,0,150,205,0,0,7); cx.fill();
+  // hollow eyes — asymmetric, wrong
+  cx.fillStyle="#050505";
+  cx.beginPath(); cx.ellipse(-62+rnd(-4,4),-45,34,52+rnd(0,14),rnd(-.2,.2),0,7); cx.fill();
+  cx.beginPath(); cx.ellipse(58+rnd(-4,4),-52,30,60+rnd(0,18),rnd(-.2,.2),0,7); cx.fill();
+  cx.fillStyle="#fff";
+  cx.fillRect(-68+rnd(-3,3),-52+rnd(-3,3),5,5);
+  cx.fillRect(54+rnd(-3,3),-60+rnd(-3,3),5,5);
+  // mouth stretched far too wide
+  cx.fillStyle="#0a0304";
+  cx.beginPath();
+  cx.ellipse(0,95,110+Math.sin(t*30)*18,55+t*30,0,0,7);
+  cx.fill();
+  cx.strokeStyle="#c8b8a8"; cx.lineWidth=3;
+  for(let i=-4;i<=4;i++){ cx.beginPath(); cx.moveTo(i*24,52); cx.lineTo(i*22,80+rnd(0,8)); cx.stroke(); }
+  cx.restore();
+  // slice displacement
+  for(let i=0;i<10;i++){
+    const y=ri(0,H-8), hgt=ri(2,8);
+    cx.putImageData(cx.getImageData(0,y,W,hgt), ri(-40,40), y);
+  }
+  if(Math.random()<.4) drawStatic(.25,4);
+  text("HE IS IN THE SIGNAL", W/2, H-46, 26, "#f33", "center");
+}
+
+/* ---------- channel renderers ---------- */
+function chTestCard(){
+  const bars=["#c0c0c0","#c0c000","#00c0c0","#00c000","#c000c0","#c00000","#0000c0"];
+  const bw=W/bars.length;
+  bars.forEach((c,i)=>{ cx.fillStyle=c; cx.fillRect(i*bw,0,bw+1,H*.72); });
+  cx.fillStyle="#111"; cx.fillRect(0,H*.72,W,H*.28);
+  text("WKRX-TV  CHANNEL 7", W/2, H*.76, 26, "#eee","center");
+  text("WE'LL BE RIGHT BACK", W/2, H*.84, 18, "#999","center");
+  if(gameMin>200 && Math.random()<.02) text("WE NEVER LEFT", W/2, H*.84, 18, "#f44","center");
+}
+function chWeather(tNow){
+  cx.fillStyle="#001830"; cx.fillRect(0,0,W,H);
+  text("WKRX ACTION WEATHER", 30, 26, 24, "#8cf");
+  text("OVERNIGHT FORECAST — GRAYSON COUNTY", 30, 62, 15, "#cde");
+  const rows=[
+    ["12 AM","41°F","FOG"],["1 AM","39°F","DENSE FOG"],["2 AM","36°F","DENSE FOG"],
+    ["3 AM","33°F","VISIBILITY 0"],["4 AM","31°F","—"],["5 AM","29°F","—"],
+    ["6 AM", gameMin>300?"??":"28°F", gameMin>300?"NO SUNRISE RECORDED":"CLEARING"],
+  ];
+  rows.forEach((r,i)=>{
+    const hr=Math.floor(gameMin/60), warm=(i===hr||(hr===0&&i===0));
+    text(r[0],40,110+i*40,17,warm?"#ff8":"#9ab");
+    text(r[1],180,110+i*40,17,warm?"#ff8":"#9ab");
+    text(r[2],280,110+i*40,17, r[2].includes("NO SUN")?"#f66":(warm?"#ff8":"#9ab"));
+  });
+  const scroll=["LOW-LYING FOG THROUGH DAWN","MOTORISTS: DO NOT STOP FOR PEDESTRIANS ON ROUTE 9",
+    "IF YOU CAN READ THIS YOU ARE THE ONLY ONE AWAKE","COUNTY ADVISES: KEEP INTERIOR LIGHTS OFF"];
+  cx.fillStyle="#012"; cx.fillRect(0,H-46,W,46);
+  const msg=scroll[Math.floor(tNow/9)%scroll.length];
+  text(msg, W-((tNow*70)%(W+700)), H-36, 20, "#ffd27f");
+}
+function chCamera(name, seed){
+  cx.fillStyle="#060a06"; cx.fillRect(0,0,W,H);
+  // grainy IR-style scene
+  cx.fillStyle="#0d140d";
+  if(seed===3){ // parking lot
+    cx.fillRect(0,H*.62,W,H*.38);
+    cx.fillStyle="#101a10";
+    for(let i=0;i<5;i++) cx.fillRect(40+i*120, H*.62-4, 90, 4); // parking lines
+    cx.fillStyle="#182018"; cx.fillRect(500,150,60,140); // pole
+    cx.fillStyle="rgba(200,220,180,.14)";
+    cx.beginPath(); cx.moveTo(530,150); cx.lineTo(430,H); cx.lineTo(630,H); cx.closePath(); cx.fill();
+  } else { // hallway
+    cx.fillStyle="#0c120c";
+    cx.beginPath(); cx.moveTo(0,0); cx.lineTo(W,0); cx.lineTo(W*.72,H*.3); cx.lineTo(W*.28,H*.3); cx.closePath(); cx.fill();
+    cx.fillStyle="#111a11"; cx.fillRect(W*.28,H*.3,W*.44,H*.5);
+    cx.fillStyle="#050805"; cx.fillRect(W*.44,H*.42,W*.12,H*.38); // dark doorway
+    for(let i=0;i<3;i++){ cx.fillStyle="#0a100a"; cx.fillRect(60+i*40,H*.3,14,H*.5); }
+  }
+  // entity lurks on cameras as threat rises (independent of anomalies — set dressing)
+  const hour=gameMin/60;
+  if(hour>1.5 && Math.sin(performance.now()/4000+seed*7)>.55){
+    const prog=clamp((hour-1.5)/4.5,0,1);
+    drawFigure(seed===3? 520-prog*180 : W*.5, seed===3? 300 : H*.55, .35+prog*.5, .55+prog*.35);
+  }
+  text("CAM "+(seed===3?"A — LOT":"B — HALL"), 24, H-40, 16, "#9f9");
+  text("REC ●", W-110, 24, 16, (Math.floor(performance.now()/500)%2)?"#f44":"#933");
+  drawGrain(.10);
+}
+function chButtons(tNow){
+  // "Mr. Buttons' Playhouse" — public-access kids show rerun
+  const bad=buttonsCorrupt;
+  cx.fillStyle=bad?"#1a0f14":"#7fbf7f"; cx.fillRect(0,0,W,H);
+  cx.fillStyle=bad?"#241019":"#a8d8a8"; cx.fillRect(0,H*.7,W,H*.3);
+  // sun
+  cx.fillStyle=bad?"#402028":"#ffe680";
+  cx.beginPath(); cx.arc(80,80,44,0,7); cx.fill();
+  // Mr. Buttons: round mascot
+  const bounce=bad?0:Math.abs(Math.sin(tNow*3))*18;
+  const mx=W/2, my=H*.62-bounce;
+  cx.fillStyle=bad?"#3d2a30":"#e8a33d";
+  cx.beginPath(); cx.arc(mx,my,86,0,7); cx.fill();          // body
+  cx.beginPath(); cx.arc(mx,my-110,54,0,7); cx.fill();      // head
+  // eyes — buttons
+  cx.fillStyle=bad?"#000":"#222";
+  const eyeY=my-120, look=bad?((performance.now()/700)%2<1?-10:10):0;
+  cx.beginPath(); cx.arc(mx-20+look,eyeY,bad?14:8,0,7); cx.fill();
+  cx.beginPath(); cx.arc(mx+20+look,eyeY,bad?14:8,0,7); cx.fill();
+  if(bad){ cx.fillStyle="#fff"; cx.fillRect(mx-22+look,eyeY-2,3,3); cx.fillRect(mx+18+look,eyeY-2,3,3); }
+  // mouth
+  cx.strokeStyle=bad?"#000":"#222"; cx.lineWidth=4;
+  cx.beginPath();
+  if(bad){ cx.moveTo(mx-26,my-88); cx.lineTo(mx+26,my-96); }   // flat, wrong
+  else cx.arc(mx,my-100,24,.15*Math.PI,.85*Math.PI);
+  cx.stroke();
+  text(bad?"mr. buttons' playhouse":"MR. BUTTONS' PLAYHOUSE", W/2, 30, 24, bad?"#733":"#fff","center");
+  const lyric = bad
+    ? pick(["stop changing the channel","he counts your teeth while you sleep","this episode never aired","LOOK BEHIND THE MONITOR"])
+    : "♪ clap clap clap with mr. buttons ♪";
+  if(!bad || Math.floor(tNow)%3===0) text(lyric, W/2, H-60, 18, bad?"#e55":"#fff","center");
+  if(bad) drawGrain(.15);
+}
+function drawGrain(a){
+  cx.fillStyle="rgba(0,0,0,0)";
+  for(let i=0;i<400;i++){
+    cx.fillStyle="rgba("+(Math.random()<.5?"255,255,255":"0,0,0")+","+a*Math.random()+")";
+    cx.fillRect(rnd(W),rnd(H),2,2);
+  }
+}
+
+/* ---------- screens ---------- */
+function drawMenu(tNow){
+  drawStatic(.18,4);
+  cx.fillStyle="rgba(0,0,0,.72)"; cx.fillRect(0,0,W,H);
+  text("W K R X - T V", W/2, 90, 30, "#9f9", "center");
+  text("D E A D   A I R", W/2, 150, 52, "#dfd", "center");
+  text("overnight master control — shift 12:00 AM → 6:00 AM", W/2, 226, 16, "#8a8", "center");
+  const rules=[
+    "1–6 ......... switch channel",
+    "SPACE ....... hold to re-track a corrupted channel",
+    "E ........... answer the phone (if it rings)",
+    "",
+    "three containment failures and it reaches master control.",
+  ];
+  rules.forEach((r,i)=>text(r, W/2-190, 280+i*26, 16, "#bdb"));
+  if(Math.floor(tNow*1.4)%2===0) text("— PRESS ANY KEY TO CLOCK IN —", W/2, H-64, 20, "#ff8", "center");
+}
+function drawIntro(tNow){
+  cx.fillStyle="#000"; cx.fillRect(0,0,W,H);
+  const lines=[
+    "WKRX-TV  ·  GRAYSON COUNTY  ·  EST. 1961",
+    "",
+    "NIGHT OPERATOR HANDBOOK — ADDENDUM 7 (1987)",
+    "",
+    "Between sign-off and sunrise, the transmitter",
+    "must never carry an uncorrected signal.",
+    "",
+    "If a channel degrades: tune to it and HOLD SPACE",
+    "until tracking is restored.",
+    "",
+    "Do not study what appears in the interference.",
+    "Do not answer questions asked through the set.",
+    "",
+    "The previous operator did.",
+  ];
+  const shown=Math.min(lines.length, Math.floor(tNow*2.4));
+  for(let i=0;i<shown;i++) text(lines[i], 60, 60+i*26, 17, i>=10?"#e88":"#9d9");
+  if(tNow>2) text("press any key to begin the shift", W/2, H-44, 15, "#886","center");
+  drawGrain(.05);
+}
+function drawEAS(tNow){
+  cx.fillStyle="#7a0505"; cx.fillRect(0,0,W,H);
+  cx.fillStyle="#fff"; cx.fillRect(0,60,W,6); cx.fillRect(0,H-66,W,6);
+  text("EMERGENCY ALERT SYSTEM", W/2, 90, 30, "#fff","center");
+  const body=[
+    "THE FOLLOWING MESSAGE IS TRANSMITTED AT THE",
+    "REQUEST OF THE GRAYSON COUNTY SHERIFF'S OFFICE.",
+    "",
+    "AN ENTITY OF UNKNOWN ORIGIN IS TRAVELING",
+    "THROUGH BROADCAST INFRASTRUCTURE.",
+    "",
+    "DO NOT ADJUST YOUR SET.",
+    "DO NOT TURN OFF YOUR SET.",
+    "IT USES THE DARK BEHIND THE GLASS.",
+    "",
+    "STATION PERSONNEL: REMAIN AT YOUR POST.",
+    "YOUR POST IS AWARE OF YOU.",
+  ];
+  const shown=Math.min(body.length, Math.floor(tNow*2.2));
+  for(let i=0;i<shown;i++) text(body[i], W/2, 150+i*24, 16, "#fee","center");
+  if(Math.floor(tNow*2)%2===0) text("■", 30, 90, 30, "#fff");
+  drawGrain(.08);
+}
+function drawDead(tNow){
+  cx.fillStyle="#000"; cx.fillRect(0,0,W,H);
+  if(tNow<1.2){ drawStatic(1,2); return; }
+  drawStatic(.06,4);
+  text("SIGNAL LOST", W/2, 150, 44, "#f44", "center");
+  text("OPERATOR #7 — SHIFT TERMINATED "+fmtClock(), W/2, 230, 18, "#a66","center");
+  text("the tape keeps recording", W/2, 280, 15, "#644","center");
+  if(tNow>4 && Math.floor(tNow*1.4)%2===0)
+    text("press any key", W/2, H-70, 16, "#886","center");
+}
+function drawWin(tNow){
+  const dawn=clamp(tNow/8,0,1);
+  const r=Math.floor(10+dawn*90), g=Math.floor(10+dawn*70), b=Math.floor(20+dawn*110);
+  cx.fillStyle="rgb("+r+","+g+","+b+")"; cx.fillRect(0,0,W,H);
+  cx.fillStyle="rgba(255,190,120,"+dawn*.5+")";
+  cx.beginPath(); cx.arc(W/2,H*.85,120,Math.PI,0); cx.fill();
+  cx.fillStyle="#0a0f1a"; cx.fillRect(0,H*.8,W,H*.2);
+  text("6:00 AM — SIGN-ON", W/2, 80, 30, "#ffe","center");
+  text("you kept the signal clean.", W/2, 140, 18, "#dcb","center");
+  if(tNow>4){
+    text("shift report filed. containment failures: "+strikes, W/2, 190, 15, "#aab","center");
+    text("see you tomorrow night, operator.", W/2, 240, 17, "#e99","center");
+  }
+  if(tNow>6){
+    // the figure stands in the sunrise, far away. it waited.
+    drawFigure(W*.82, H*.78, .5, .8);
+    if(Math.floor(tNow*1.4)%2===0) text("press any key", W/2, H-40, 15, "#889","center");
+  }
+  drawGrain(.05);
+}
+
+/* ---------- anomaly visual overlays ---------- */
+function drawAnomalyOverlay(a){
+  const sev=clamp(a.age/38,0,1);
+  if(a.kind==="invert"){
+    cx.save(); cx.globalCompositeOperation="difference";
+    cx.fillStyle="rgba(255,255,255,"+(.25+sev*.6)+")"; cx.fillRect(0,0,W,H);
+    cx.restore();
+  }
+  if(a.kind==="figure"){
+    drawFigure(W*(.25+Math.sin(a.age*.4)*.1)+sev*W*.3, H*.6, .5+sev*1.1, .5+sev*.5);
+  }
+  if(a.kind==="face" && (Math.floor(performance.now()/300)%3!==0)){
+    cx.save(); cx.globalAlpha=.12+sev*.5; cx.translate(W/2,H/2); cx.scale(.6+sev,.6+sev);
+    cx.fillStyle="#ddd0c0"; cx.beginPath(); cx.ellipse(0,0,90,120,0,0,7); cx.fill();
+    cx.fillStyle="#000";
+    cx.beginPath(); cx.ellipse(-32,-24,16,26,0,0,7); cx.fill();
+    cx.beginPath(); cx.ellipse(30,-28,15,30,0,0,7); cx.fill();
+    cx.beginPath(); cx.ellipse(0,52,40,18+sev*26,0,0,7); cx.fill();
+    cx.restore();
+  }
+  if(a.kind==="text" && Math.random()<.5){
+    const msgs=["LET ME OUT","WHO TOLD YOU TO WATCH","I CAN SEE THE BOOTH","OPEN THE TRANSMITTER ROOM","YOU ARE ON CAMERA TOO"];
+    text(pick(msgs), rnd(60,W-260), rnd(60,H-80), 20+sev*14, "rgba(255,60,60,"+(.4+sev*.5)+")");
+  }
+  trackingLines(.2+sev*.8);
+  if(Math.random()<sev*.4) drawStatic(.2,4);
+}
+
+/* ---------- main loop ---------- */
+let last=performance.now();
+function frame(now){
+  const dt=Math.min(.05,(now-last)/1000); last=now;
+  const tNow=now/1000;
+  stateT+=dt;
+  if(subT>0){ subT-=dt; if(subT<=0) sub=""; }
+  noiseBurst=Math.max(0,noiseBurst-dt*2.2);
+  shake=Math.max(0,shake-dt*1.8);
+
+  cx.save();
+  if(shake>0) cx.translate(rnd(-8,8)*shake, rnd(-6,6)*shake);
+
+  switch(state){
+    case ST.MENU: drawMenu(tNow); break;
+    case ST.INTRO: drawIntro(stateT); break;
+    case ST.EAS:
+      gameMin+=dt; drawEAS(stateT);
+      if(stateT>13){ state=ST.PLAY; easTone(false); say("…resuming normal programming.",3); }
+      break;
+    case ST.PHONE:
+      gameMin+=dt;
+      drawPlayChannel(tNow);
+      if(phoneRingT>=0){
+        phoneRingT+=dt;
+        if(phoneRingT%2<dt) phoneRingTone();
+        text("☎ LINE 1  —  press E", W/2, 40, 22, (Math.floor(tNow*2)%2)?"#ff6":"#a84", "center");
+        if(phoneRingT>16){ phoneRingT=-1; state=ST.PLAY; say("the ringing stopped by itself.",4); addLog(fmtClock()+" CALL ABANDONED"); }
+      }
+      break;
+    case ST.PLAY:
+      gameMin+=dt;
+      anomalyTick(dt);
+      scriptTick();
+      drawPlayChannel(tNow);
+      break;
+    case ST.SCARE:
+      scareT+=dt; drawScareFace(scareT);
+      if(scareT>2.6){ state=ST.DEAD; deadT=0; setStaticLevel(.02); setDroneLevel(0); }
+      break;
+    case ST.DEAD: deadT+=dt; drawDead(deadT); break;
+    case ST.WIN: winT+=dt; drawWin(winT); break;
+  }
+
+  // channel-change / disruption noise
+  if(noiseBurst>0 && state!==ST.SCARE){ drawStatic(noiseBurst*.85,3); trackingLines(noiseBurst); }
+  cx.restore();
+
+  // OSD text
+  if(state===ST.PLAY||state===ST.PHONE||state===ST.EAS){
+    const anomCount=Object.keys(anomalies).length;
+    osd.textContent="CH "+(state===ST.EAS?"—":channel)+"  SP"
+      +(anomCount? "\nINTRUSION×"+anomCount : "")
+      +(strikes? "\nFAIL "+strikes+"/3":"");
+    osdclock.textContent=fmtClock();
+  } else { osd.textContent=""; osdclock.textContent=""; }
+  subEl.textContent=sub;
+  trackEl.textContent = (tracking && state===ST.PLAY)
+    ? "TRACKING ["+("█".repeat(Math.floor(trackProgress*20)).padEnd(20,"░"))+"]"
+    : (anomalies[channel] && state===ST.PLAY ? "HOLD SPACE TO RE-TRACK" : "");
+
+  // ambient flicker
+  if(Math.random()<.02) flickerEl.style.opacity=rnd(0,.05);
+
+  requestAnimationFrame(frame);
+}
+function drawPlayChannel(tNow){
+  switch(channel){
+    case 1: chTestCard(); break;
+    case 2: chWeather(tNow); break;
+    case 3: chCamera("lot",3); break;
+    case 4: chCamera("hall",4); break;
+    case 5: chButtons(tNow); break;
+    case 6:
+      drawStatic(1,3);
+      // channel six is where the last operator went
+      if(gameMin>150 && Math.random()<.06){
+        cx.fillStyle="rgba(0,0,0,.55)"; cx.fillRect(0,0,W,H);
+        drawFigure(W/2,H*.6,1.1,.8);
+        if(Math.random()<.3) text("HELLO OPERATOR", W/2, 80, 30, "rgba(255,255,255,.5)","center");
+      }
+      break;
+  }
+  if(anomalies[channel]) drawAnomalyOverlay(anomalies[channel]);
+  // ambient wear: late-night degradation everywhere
+  const hour=gameMin/60;
+  if(hour>2) trackingLines(clamp((hour-2)/8,.05,.4));
+  drawGrain(.04+threat*.05);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
