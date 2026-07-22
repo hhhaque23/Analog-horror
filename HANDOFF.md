@@ -103,12 +103,16 @@ Track: `0 LOT → 1 HALL → 2 DOOR → 3 = death`. Advance timer
 | `track` | `surge` | tuner (wider band, violent jolts) | **10 s** | 1.0 s |
 | `stare` | `stare` | **look away** (grows 2.6×/s watched, decays .85×/s ignored) | 26 s | — |
 
-Tuner: SPACE toggles; a needle (drift + jolt impulses, damped velocity)
-must be steered into a relocating sweet-spot band. In-band fills `lock`;
-out-of-band decays it + `screech()`. At 50 %/85 % lock the anomaly
-"lunges" (stinger blip + shake). After 3 AM random 0.5–0.9 s **input
-inversion** windows (UI flags "►◄ INVERTED"). Fuse keeps ticking while
-tuning. Expiry = strike (−12 integrity); **3 strikes = death**.
+Tuner: SPACE toggles; the needle is a **direct slider** (hold ←/→, moves
+the full rail in ~1.8 s, stops on release) with light wobble and rare
+±.06 nudges (surge ±.10). The sweet-spot band is wide (.20 / surge .26)
+and drifts near its current spot. In-band fills `lock`; out-of-band
+decays it at .3/s + `screech()`. At 50 %/85 % lock the anomaly "lunges"
+(stinger blip + shake). After 4 AM rare 0.4–0.6 s **input inversion**
+windows (UI flags "►◄ INVERTED"). Tuning costs 1.0 %/s power. Fuse keeps
+ticking while tuning. Expiry = strike (−12 integrity); **3 strikes =
+death**. Other softeners: door window `rnd(8,10)`/`rnd(5,7)` s, entity
+aggro floor .45.
 
 ### Threat / dread
 

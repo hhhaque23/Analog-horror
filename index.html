@@ -430,7 +430,7 @@ let channel = 1;
 let anomalies = {};         // ch -> {age,kind,resp,fuse,lockNeed,warned}
 let strikes = 0;
 // tuner minigame
-let tuneOn=false, needle=.5, needleV=0, band=.5, bandW=.16, bandTo=.5, lock=0, invertT=0, lunged={};
+let tuneOn=false, needle=.5, band=.5, bandW=.2, bandTo=.5, lock=0, invertT=0, lunged={};
 // power (the FNAF resource)
 let power = 100, blackT = 0;
 // the entity walking the station: 0 LOT → 1 HALL → 2 DOOR → 3 BOOTH
@@ -515,7 +515,7 @@ function startIntro(){ state=ST.INTRO; stateT=0; }
 function startNight(){
   state=ST.PLAY; stateT=0; gameMin=0; channel=1;
   anomalies={}; strikes=0; threat=0; dread=0;
-  tuneOn=false; needle=.5; needleV=0; band=.5; bandTo=.5; bandW=.16; lock=0; invertT=0; lunged={};
+  tuneOn=false; needle=.5; band=.5; bandTo=.5; bandW=.2; lock=0; invertT=0; lunged={};
   power=100; blackT=0;
   entityPos=0; entityTimer=rnd(45,70); doorT=-1; doorWindow=8;
   deathCause="";
@@ -649,9 +649,9 @@ function toggleTuner(){
   if(tuneOn){ tuneOn=false; lock=0; updateStaticBed(); return; }
   if(!a || a.resp!=="track") return;
   tuneOn=true; lock=0; lunged={};
-  needle=rnd(.15,.85); needleV=0;
-  band=rnd(.2,.8); bandTo=rnd(.2,.8);
-  bandW = a.kind==="surge" ? .2 : .14;
+  needle=rnd(.15,.85);
+  band=rnd(.2,.8); bandTo=band;
+  bandW = a.kind==="surge" ? .26 : .20;
   beep(1400,.06,.08);
 }
 function tuneTick(dt){
@@ -660,23 +660,20 @@ function tuneTick(dt){
   if(!tuneOn || state!==ST.PLAY) return;
   const hour=gameMin/60;
   setStaticLevel(.22);
-  power=Math.max(0,power-dt*1.5); // tuning is expensive
+  power=Math.max(0,power-dt*1.0); // tuning is expensive
 
-  // the needle fights you: drift + jolts; the sweet spot relocates
+  // direct slider: hold ◄ ► and the needle goes there; light wobble + rare nudges
   const now=performance.now()/1000;
   const drift=Math.sin(now*1.7)*.22+Math.sin(now*3.1+1.3)*.14;
-  const jolt=(a.kind==="surge"? .55 : .3);
-  if(Math.random()<dt*(a.kind==="surge"?2.2:1.1)) needleV += rnd(-jolt,jolt);
-  // input inversion windows after 3 AM
-  if(hour>3 && invertT<=0 && Math.random()<dt*.25) invertT=rnd(.5,.9);
+  const joltAmt=(a.kind==="surge"? .10 : .06);
+  if(Math.random()<dt*(a.kind==="surge"?1.1:.5)) needle += rnd(-joltAmt,joltAmt);
+  // input inversion windows after 4 AM
+  if(hour>4 && invertT<=0 && Math.random()<dt*.12) invertT=rnd(.4,.6);
   invertT=Math.max(0,invertT-dt);
   const dir=((keys["ArrowLeft"]||keys["KeyA"])?-1:0)+((keys["ArrowRight"]||keys["KeyD"])?1:0);
-  needleV += dir*(invertT>0?-1:1)*dt*2.6;
-  needleV *= Math.pow(.14,dt); // damping
-  needle = clamp(needle + needleV*dt*2.2 + drift*dt*.5, 0, 1);
-  if(needle<=0||needle>=1) needleV*=-.5;
-  if(Math.random()<dt*.5) bandTo=rnd(.12,.88);
-  band += clamp(bandTo-band,-dt*.22,dt*.22);
+  needle = clamp(needle + dir*(invertT>0?-1:1)*dt*.55 + drift*dt*.25, 0, 1);
+  if(Math.random()<dt*.3) bandTo=clamp(band+rnd(-.3,.3),.12,.88);
+  band += clamp(bandTo-band,-dt*.15,dt*.15);
 
   const inBand = Math.abs(needle-band) < bandW/2;
   if(inBand){
@@ -687,7 +684,7 @@ function tuneTick(dt){
     }
   } else {
     if(lock>0 && Math.random()<dt*3) screech();
-    lock = Math.max(0, lock - dt*.55);
+    lock = Math.max(0, lock - dt*.3);
   }
   if(lock>=1){
     delete anomalies[channel];
@@ -704,7 +701,7 @@ function tuneTick(dt){
 /* ---------- the entity walks the station ---------- */
 function entityAggro(){ // interval scale: night hour + strikes
   const hour=gameMin/60;
-  const base=lerp(1,.38,clamp(hour/5,0,1));
+  const base=lerp(1,.45,clamp(hour/5,0,1));
   return base*Math.pow(.8,strikes);
 }
 function entityTick(dt){
@@ -718,7 +715,7 @@ function entityTick(dt){
       if(entityPos===1) say("something crossed the lot.",3);
       if(entityPos===2){
         doorT=0;
-        doorWindow = gameMin/60>3 ? rnd(4,6) : rnd(7,9);
+        doorWindow = gameMin/60>3 ? rnd(5,7) : rnd(8,10);
         knock();
         say("IT IS AT THE BOOTH DOOR — FLOOD THE SIGNAL (F)",5);
         addLog(fmtClock()+" DOOR CONTACT");
