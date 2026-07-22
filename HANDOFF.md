@@ -35,11 +35,18 @@ Sections top-to-bottom (search the banner comments):
 
 1. **utility** — `rnd/ri/clamp/lerp/pick`.
 2. **audio** — `initAudio()` builds persistent beds: 60 Hz mains hum,
-   looping noise static (`setStaticLevel`), dread drone (`setDroneLevel`),
-   whisper bed (`setWhisperLevel`). One-shots: `beep`, `stinger`, `scream`,
-   `screech`, `thump` (heartbeat), `footstep`, `knock`, `advanceCue`
-   (entity moved), `floodBlast`, `easTone`, `phoneRingTone`,
-   `evilRingTone` (slow/low = the tell), `silenceScare`.
+   looping noise static (`setStaticLevel`), dread drone + a 38.7 Hz twin
+   (0.7 Hz beat = physical unease, `setDroneLevel`), whisper bed
+   (`setWhisperLevel`), **breathing bed** (LFO-modulated lowpassed noise,
+   `setBreathLevel(level, rate)` — slows/deepens with threat), and a
+   final-hour 3.2 kHz **riser** (`setRiserLevel`). One-shots: `beep`,
+   `stinger`, `scream`, `screech`, `thump` (heartbeat), `footstep`,
+   `knock`, `advanceCue` (entity moved), `floodBlast`, `easTone`,
+   `phoneRingTone`, `evilRingTone` (slow/low = the tell), `silenceScare`,
+   plus dread textures `metalGroan`/`clickCluster`/`tapeFlutter`/
+   `whisperBurst` fired by `ambienceTick` every `rnd(14,34)*(1-threat*.4)`
+   s in PLAY. `#vignette` opacity breathes in `frame()` at the same
+   0.28 Hz when threat > .3.
 3. **MOSH studio intro audio** — `studioAudio()` / `stopStudioAudio()`.
 4. **game state** — `ST` enum:
    `BOOT → STUDIO → MENU → INTRO → PLAY ⇄ EAS → SCARE → DEAD | WIN`,
@@ -152,9 +159,22 @@ any death = F, with `deathCause` shown on the DEAD screen. Last grade in
 - **`drawCrawler`** — stop-motion (130 ms quantized) all-fours thing on
   the cameras after 2 AM.
 - **`drawWatcher`** — blinking eye-pairs in dark regions.
-- **`drawScareFace(t)`** — death face: rolling eye-whites, two teeth rows,
-  veins, slice displacement + vertical melt; also the subliminal flash and
-  the studio-intro corruption frame.
+- **`drawMask(x,y,scale,rage)`** — the entity's true face: cracked
+  bone-white mask (radial-shaded skull, seeded `drawCracks`, carved sigil
+  rows, hollow sockets with drifting red embers, blood streaks, jagged
+  broken mouth, ribbed `throatCables` descending from the jaw). `rage`
+  0..1 widens cracks/mouth and brightens embers.
+- **`drawCableWall(alpha, seed)`** — background wall of ~46 writhing dark
+  bezier cables. Behind the scare face, ch6 after 3:30, the DEAD screen.
+  NOTE: `drawStatic` uses `putImageData`, which *replaces* pixels — always
+  draw static UNDER the wall/mask, never after.
+- **`drawScareFace(t)`** — death face: cable wall + `drawMask` lunging
+  (15 % of frames are a full-static strobe), slice displacement + vertical
+  melt; also the subliminal flash and the studio-intro corruption frame.
+- **Grit hooks:** corrupted Buttons gets `drawCracks` + bleeding button
+  eyes; threat > .5 blooms grime in the corners; threat > .6 draws slow
+  crimson runnels from the top edge; the ch6 operator's head becomes a
+  small mask once fully turned (`opFacing > .9`).
 
 ## MOSH studio intro
 

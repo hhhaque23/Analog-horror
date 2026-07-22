@@ -137,6 +137,7 @@ const subEl = document.getElementById("subtitle");
 const trackEl = document.getElementById("trackbar");
 const flickerEl = document.getElementById("flicker");
 const powerEl = document.getElementById("powerbar");
+const vigEl = document.getElementById("vignette");
 
 /* ---------- utility ---------- */
 const rnd = (a=1,b) => b===undefined ? Math.random()*a : a+Math.random()*(b-a);
@@ -144,11 +145,12 @@ const ri = (a,b) => Math.floor(rnd(a,b+1));
 const clamp = (v,a,b) => v<a?a:v>b?b:v;
 const lerp = (a,b,t) => a+(b-a)*t;
 const pick = arr => arr[Math.floor(Math.random()*arr.length)];
+const hash = n => { const v=Math.sin(n*127.1)*43758.5453; return v-Math.floor(v); };
 
 /* ---------- audio (all procedural, WebAudio) ---------- */
 let AC=null, master=null, humOsc=null, humGain=null;
 let staticSrc=null, staticGain=null, droneOsc=null, droneGain=null;
-let whisperGain=null;
+let whisperGain=null, breathGain=null, breathLFO=null, riserGain=null;
 function initAudio(){
   if(AC) return;
   AC = new (window.AudioContext||window.webkitAudioContext)();
@@ -180,6 +182,25 @@ function initAudio(){
   droneGain = AC.createGain(); droneGain.gain.value=0.0;
   droneOsc.connect(dflt).connect(droneGain).connect(master);
   droneOsc.start();
+  // second drone a hair off-pitch: a 0.7 Hz beat you feel more than hear
+  const drone2 = AC.createOscillator(); drone2.type="sawtooth"; drone2.frequency.value=38.7;
+  drone2.connect(dflt); drone2.start();
+
+  // breathing bed: lowpassed noise, amplitude riding a slow inhale/exhale LFO
+  const bsrc = AC.createBufferSource(); bsrc.buffer=buf; bsrc.loop=true;
+  const blp = AC.createBiquadFilter(); blp.type="lowpass"; blp.frequency.value=400;
+  breathLFO = AC.createOscillator(); breathLFO.type="sine"; breathLFO.frequency.value=.28;
+  const blg = AC.createGain(); blg.gain.value=.5;
+  const binner = AC.createGain(); binner.gain.value=.5;
+  breathLFO.connect(blg).connect(binner.gain);
+  breathGain = AC.createGain(); breathGain.gain.value=0;
+  bsrc.connect(blp).connect(binner).connect(breathGain).connect(master);
+  bsrc.start(); breathLFO.start();
+
+  // final-hour anxiety riser: a high tone at the edge of hearing
+  const riser = AC.createOscillator(); riser.type="sine"; riser.frequency.value=3200;
+  riserGain = AC.createGain(); riserGain.gain.value=0;
+  riser.connect(riserGain).connect(master); riser.start();
 
   // whisper bed: narrow band-passed noise with a wandering formant —
   // sounds like unintelligible speech just under the static
@@ -195,6 +216,12 @@ function initAudio(){
 function setStaticLevel(v){ if(staticGain) staticGain.gain.setTargetAtTime(v, AC.currentTime, .08); }
 function setDroneLevel(v){ if(droneGain) droneGain.gain.setTargetAtTime(v, AC.currentTime, .3); }
 function setWhisperLevel(v){ if(whisperGain) whisperGain.gain.setTargetAtTime(v, AC.currentTime, .4); }
+function setBreathLevel(v, rate){
+  if(!breathGain) return;
+  breathGain.gain.setTargetAtTime(v, AC.currentTime, .8);
+  if(rate!==undefined) breathLFO.frequency.setTargetAtTime(rate, AC.currentTime, 2);
+}
+function setRiserLevel(v){ if(riserGain) riserGain.gain.setTargetAtTime(v, AC.currentTime, 3); }
 function beep(freq=1000,dur=.12,vol=.15,type="square"){
   if(!AC) return;
   const o=AC.createOscillator(),g=AC.createGain();
@@ -360,6 +387,66 @@ function floodBlast(){
   n.connect(g).connect(master); n.start(); n.stop(AC.currentTime+.85);
   beep(70,.6,.2,"sawtooth");
 }
+function metalGroan(){ // the building settles wrong
+  if(!AC) return;
+  const t=AC.currentTime;
+  const o=AC.createOscillator(),g=AC.createGain(),f=AC.createBiquadFilter();
+  o.type="sawtooth";
+  o.frequency.setValueAtTime(55,t);
+  o.frequency.linearRampToValueAtTime(38,t+2.2);
+  f.type="bandpass"; f.frequency.value=180; f.Q.value=3;
+  g.gain.setValueAtTime(0,t);
+  g.gain.linearRampToValueAtTime(.05,t+.6);
+  g.gain.exponentialRampToValueAtTime(.0001,t+2.5);
+  o.connect(f).connect(g).connect(master); o.start(t); o.stop(t+2.6);
+}
+function clickCluster(){ // dry throat clicks, too close
+  if(!AC) return;
+  let t=AC.currentTime;
+  const n=ri(3,6);
+  for(let k=0;k<n;k++){
+    const src=AC.createBufferSource(); src.buffer=staticSrc.buffer;
+    const hp=AC.createBiquadFilter(); hp.type="highpass"; hp.frequency.value=2500;
+    const g=AC.createGain();
+    g.gain.setValueAtTime(.10,t);
+    g.gain.exponentialRampToValueAtTime(.0001,t+.03);
+    src.connect(hp).connect(g).connect(master); src.start(t); src.stop(t+.04);
+    t+=rnd(.09,.15);
+  }
+}
+function tapeFlutter(){ // the recording itself hiccups
+  if(!AC) return;
+  const t=AC.currentTime;
+  const src=AC.createBufferSource(); src.buffer=staticSrc.buffer;
+  const bp=AC.createBiquadFilter(); bp.type="bandpass"; bp.frequency.value=2400;
+  const g=AC.createGain();
+  g.gain.setValueAtTime(0,t);
+  for(let k=0;k<6;k++){
+    g.gain.setValueAtTime(.06,t+k*.09);
+    g.gain.setValueAtTime(.01,t+k*.09+.045);
+  }
+  g.gain.setValueAtTime(0,t+.6);
+  src.connect(bp).connect(g).connect(master); src.start(t); src.stop(t+.65);
+  const o=AC.createOscillator(),og=AC.createGain();
+  o.type="sine";
+  o.frequency.setValueAtTime(310,t);
+  o.frequency.linearRampToValueAtTime(270,t+.3);
+  o.frequency.linearRampToValueAtTime(330,t+.6);
+  og.gain.setValueAtTime(.02,t);
+  og.gain.exponentialRampToValueAtTime(.0001,t+.6);
+  o.connect(og).connect(master); o.start(t); o.stop(t+.62);
+}
+function whisperBurst(){ // right at your ear, once
+  if(!AC||!whisperGain) return;
+  whisperGain.gain.setValueAtTime(.22,AC.currentTime);
+}
+let ambIn=12;
+function ambienceTick(dt){
+  ambIn-=dt;
+  if(ambIn>0) return;
+  ambIn=rnd(14,34)*(1-threat*.4);
+  pick([metalGroan, clickCluster, tapeFlutter, whisperBurst, ()=>footstep(.08)])();
+}
 
 /* ---------- MOSH studio intro audio ---------- */
 let studioNodes=[];
@@ -524,7 +611,7 @@ function startNight(){
   activeCall=-1; phoneRingT=-1; logLines=[];
   integrity=100; restoredCount=0; finalGrade="";
   heartIn=0; sublimT=0;
-  nextAnomalyIn=8; nextTarget=ri(1,5);
+  nextAnomalyIn=8; nextTarget=ri(1,5); ambIn=12;
   buildEvents();
   say("Shift start. Keep every channel clean until 6 AM.",5);
   addLog("00:00 SHIFT START — OP #7 ON DUTY");
@@ -533,6 +620,7 @@ function startNight(){
 function resetToMenu(){
   state=ST.MENU; stateT=0;
   easTone(false); setStaticLevel(0); setDroneLevel(0); setWhisperLevel(0);
+  setBreathLevel(0); setRiserLevel(0);
 }
 function updateStaticBed(){
   const base = channel===6 ? .10 : .02;
@@ -615,8 +703,12 @@ function anomalyTick(dt){
   dread = Math.max(0, dread - dt*.004);
   ch6Heat = Math.max(0, ch6Heat - dt*.004);
   threat = clamp(hour/6*.42 + strikes*.18 + anomCount*.06 + ch6Heat + dread, 0, 1);
-  setDroneLevel(threat*.10);
+  setDroneLevel(threat*.13);
   if(humGain) humGain.gain.setTargetAtTime(.012+threat*.02, AC.currentTime, 1);
+  // something large breathing, closer and slower as the night rots
+  setBreathLevel(threat>.35 ? (threat-.35)*.12 : 0, .28-threat*.08);
+  // final-hour riser at the edge of hearing
+  setRiserLevel(hour>5 ? (hour-5)*.007 : 0);
 
   // heartbeat under high threat
   if(threat>.55){
@@ -832,6 +924,7 @@ function scriptTick(){
     finalGrade=finishGrade(true);
     state=ST.WIN; winT=0;
     easTone(false); setDroneLevel(0); setWhisperLevel(0); setStaticLevel(.02);
+    setBreathLevel(0); setRiserLevel(0);
   }
 }
 function startCall(i){
@@ -877,6 +970,7 @@ function triggerScare(cause){
   tuneOn=false;
   stinger(); scream();
   setStaticLevel(.5); setDroneLevel(.3); setWhisperLevel(0);
+  setBreathLevel(0); setRiserLevel(0);
   flickerEl.style.opacity=.9;
   setTimeout(()=>flickerEl.style.opacity=0,90);
 }
@@ -1009,53 +1103,157 @@ function drawWatcher(x, y, n, sev){
     cx.fillRect(x+ox+5,y+oy,3,3);
   }
 }
-function drawScareFace(t){
-  // procedurally distorted face, full screen
-  cx.fillStyle="#000"; cx.fillRect(0,0,W,H);
-  const jx=rnd(-14,14), jy=rnd(-10,10);
-  cx.save(); cx.translate(W/2+jx,H/2+jy);
-  const s=1+t*.35+Math.sin(t*40)*.03;
-  cx.scale(s,s*(1+Math.sin(t*23)*.08));
-  // skin
-  cx.fillStyle="#d9cfc0";
-  cx.beginPath(); cx.ellipse(0,0,150,205,0,0,7); cx.fill();
-  // veins crawling in from the edges
-  cx.strokeStyle="rgba(110,20,25,.55)"; cx.lineWidth=2;
-  for(let i=0;i<7;i++){
-    const a0=i*.9+.4;
-    cx.beginPath();
-    cx.moveTo(Math.cos(a0)*150, Math.sin(a0)*205);
-    cx.quadraticCurveTo(Math.cos(a0)*90+rnd(-20,20), Math.sin(a0)*120+rnd(-20,20),
-                        Math.cos(a0)*40, Math.sin(a0)*60);
+function drawCableWall(alpha=1, seedBase=0){
+  // a wall of tangled dark cables, writhing almost imperceptibly
+  const now=performance.now()/1000;
+  cx.save(); cx.globalAlpha=alpha;
+  cx.fillStyle="#040404"; cx.fillRect(0,0,W,H);
+  for(let i=0;i<46;i++){
+    const s=seedBase+i;
+    const y0=hash(s)*H*1.4-H*.2;
+    const c1x=W*.25+hash(s+9)*200-100, c1y=hash(s+17)*H;
+    const c2x=W*.6+hash(s+31)*220-110, c2y=hash(s+43)*H;
+    const y1=hash(s+57)*H*1.4-H*.2;
+    const wob=Math.sin(now*.3+s)*6;
+    const thick=2+hash(s+71)*7;
+    const shade=14+Math.floor(hash(s+83)*40);
+    cx.strokeStyle="rgb("+shade+","+shade+","+(shade+2)+")";
+    cx.lineWidth=thick; cx.lineCap="round";
+    cx.beginPath(); cx.moveTo(-40,y0);
+    cx.bezierCurveTo(c1x,c1y+wob,c2x,c2y-wob,W+40,y1);
     cx.stroke();
-  }
-  // hollow sockets with rolling eye-whites inside
-  cx.fillStyle="#050505";
-  cx.beginPath(); cx.ellipse(-62+rnd(-4,4),-45,34,52+rnd(0,14),rnd(-.2,.2),0,7); cx.fill();
-  cx.beginPath(); cx.ellipse(58+rnd(-4,4),-52,30,60+rnd(0,18),rnd(-.2,.2),0,7); cx.fill();
-  const roll=performance.now()/140;
-  for(const [ex,ey] of [[-62,-45],[58,-52]]){
-    cx.fillStyle="#e8e4da";
-    cx.beginPath(); cx.arc(ex+Math.cos(roll)*10, ey+Math.sin(roll)*14, 11,0,7); cx.fill();
-    cx.fillStyle="#000";
-    cx.beginPath(); cx.arc(ex+Math.cos(roll)*13, ey+Math.sin(roll)*17, 3,0,7); cx.fill();
-  }
-  // mouth stretched far too wide, with too many rows of teeth
-  cx.fillStyle="#0a0304";
-  const mw=110+Math.sin(t*30)*18, mh=55+t*30;
-  cx.beginPath(); cx.ellipse(0,95,mw,mh,0,0,7); cx.fill();
-  cx.fillStyle="#cfc4b2";
-  for(let row=0;row<2;row++){
-    const ry=95-mh+14+row*22, tn=9-row*2;
-    for(let i=-tn;i<=tn;i++){
-      cx.beginPath();
-      cx.moveTo(i*11-4,ry); cx.lineTo(i*11+4,ry); cx.lineTo(i*11,ry+12+rnd(0,4));
-      cx.closePath(); cx.fill();
+    if(i%3===0){ // dull sheen along a few strands
+      cx.strokeStyle="rgba(120,120,128,.10)"; cx.lineWidth=1;
+      cx.beginPath(); cx.moveTo(-40,y0-thick*.35);
+      cx.bezierCurveTo(c1x,c1y+wob-thick*.35,c2x,c2y-wob-thick*.35,W+40,y1-thick*.35);
+      cx.stroke();
     }
   }
-  cx.strokeStyle="#c8b8a8"; cx.lineWidth=3;
-  for(let i=-4;i<=4;i++){ cx.beginPath(); cx.moveTo(i*24,52); cx.lineTo(i*22,80+rnd(0,8)); cx.stroke(); }
   cx.restore();
+}
+function drawCracks(x,y,r,n,seed){
+  for(let c=0;c<n;c++){
+    cx.strokeStyle="rgba(30,24,18,"+(.45+hash(seed+c*5)*.3)+")";
+    cx.lineWidth=.8+hash(seed+c*3.3)*1.4;
+    let a=hash(seed+c*7)*6.28, px=x+Math.cos(a)*r*.2, py=y+Math.sin(a)*r*.2;
+    cx.beginPath(); cx.moveTo(px,py);
+    for(let k=0;k<5;k++){
+      a+=(hash(seed+c*11+k)-.5)*1.4;
+      px+=Math.cos(a)*r*.22; py+=Math.sin(a)*r*.22;
+      cx.lineTo(px,py);
+    }
+    cx.stroke();
+  }
+}
+function throatCables(x,y,scale){
+  // ribbed cables descending from the jaw like a mechanical throat
+  for(let i=0;i<7;i++){
+    const s=i*13.7;
+    const ox=(i-3)*10*scale;
+    const sw=Math.sin(performance.now()/1400+i)*4;
+    const sh=14+Math.floor(hash(s)*18);
+    cx.strokeStyle="rgb("+sh+","+sh+","+(sh+3)+")";
+    cx.lineWidth=(3.5+hash(s+5)*4)*scale; cx.lineCap="round";
+    cx.beginPath(); cx.moveTo(x+ox,y);
+    cx.quadraticCurveTo(x+ox+sw, y+90*scale, x+ox+sw*2, y+260*scale);
+    cx.stroke();
+    cx.strokeStyle="rgba(0,0,0,.55)"; cx.lineWidth=1;
+    for(let r2=1;r2<9;r2++){
+      const ry=y+r2*26*scale+hash(s+r2)*8*scale;
+      cx.beginPath(); cx.moveTo(x+ox-4*scale,ry); cx.lineTo(x+ox+4*scale,ry); cx.stroke();
+    }
+  }
+}
+function drawMask(mx,my,scale,rage=0){
+  // the entity's true face: a cracked bone mask, carved and bleeding
+  const now=performance.now();
+  const tw=(hash(Math.floor(now/460))<.12 ? rnd(-3,3)*(.4+rage) : 0);
+  cx.save();
+  cx.translate(mx+Math.sin(now/1900)*2+tw, my+Math.sin(now/2300)*1.5);
+  cx.scale(scale,scale);
+  throatCables(0,95,1);
+  // bone with radial shading
+  const g=cx.createRadialGradient(-20,-40,10,0,0,150);
+  g.addColorStop(0,"#e6ddcc"); g.addColorStop(.55,"#cfc4ad");
+  g.addColorStop(.8,"#8d8471"); g.addColorStop(1,"#453f33");
+  cx.fillStyle=g;
+  cx.beginPath(); cx.ellipse(0,-10,95,130,0,0,7); cx.fill();
+  // sunken temples and cheeks
+  cx.fillStyle="rgba(58,50,38,.5)";
+  cx.beginPath(); cx.ellipse(-58,-8,26,60,.3,0,7); cx.fill();
+  cx.beginPath(); cx.ellipse(58,-8,26,60,-.3,0,7); cx.fill();
+  cx.fillStyle="rgba(70,62,48,.5)";
+  cx.beginPath(); cx.ellipse(0,50,26,20,0,0,7); cx.fill();
+  // hollow sockets with drifting embers and bleed-stains
+  for(const s of [-1,1]){
+    cx.fillStyle="#000";
+    cx.beginPath(); cx.ellipse(s*40,-38,27,32,s*.12,0,7); cx.fill();
+    const ex=s*40+Math.sin(now/900+s)*4, ey=-36+Math.cos(now/1100)*3;
+    const flick=.5+.5*Math.sin(now/140+s*3);
+    const eg=cx.createRadialGradient(ex,ey,0,ex,ey,9);
+    eg.addColorStop(0,"rgba(255,"+Math.floor(60+rage*70)+",30,"+((.5+rage*.5)*(.6+.4*flick)).toFixed(3)+")");
+    eg.addColorStop(1,"rgba(120,10,5,0)");
+    cx.fillStyle=eg;
+    cx.beginPath(); cx.arc(ex,ey,9,0,7); cx.fill();
+    cx.strokeStyle="rgba(110,14,14,.6)"; cx.lineCap="round";
+    for(let b=0;b<3;b++){
+      cx.lineWidth=1.2+hash(s*9+b)*1.6;
+      const bx=s*(26+b*6);
+      cx.beginPath(); cx.moveTo(bx,-16);
+      cx.quadraticCurveTo(bx+hash(b+s)*4-2, 20, bx+hash(b*3+s)*8-4, 44+hash(b*7)*30+rage*20);
+      cx.stroke();
+    }
+  }
+  // sunken nose
+  cx.fillStyle="#1c1812";
+  cx.beginPath(); cx.moveTo(-8,22); cx.lineTo(8,22); cx.lineTo(0,-2); cx.closePath(); cx.fill();
+  // hairline cracks, widening with rage
+  drawCracks(0,-70,120,6+Math.floor(rage*4),3.3);
+  drawCracks(-40,-10,90,4,17.9);
+  drawCracks(44,6,80,4,29.4);
+  // carved sigil rows across brow and cheekbones
+  cx.strokeStyle="rgba(52,44,34,.8)"; cx.lineWidth=1.1;
+  for(let row=0;row<4;row++){
+    const ry=[-86,-6,6,18][row];
+    const rx0=row===0?-42:(row%2?-68:26);
+    const cnt=row===0?12:7;
+    for(let gp=0;gp<cnt;gp++){
+      const gx=rx0+gp*7, gy=ry+hash(row*31+gp)*4;
+      for(let st=0;st<3;st++){
+        cx.beginPath();
+        cx.moveTo(gx+hash(row+gp+st)*4-2, gy+hash(gp*3+st)*5-2);
+        cx.lineTo(gx+hash(row*7+gp+st+9)*5-2, gy+3+hash(st+gp)*4);
+        cx.stroke();
+      }
+    }
+  }
+  // broken mouth: a jagged black gap with chipped edges
+  cx.fillStyle="#050302";
+  cx.beginPath();
+  cx.moveTo(-46,78);
+  for(let k=0;k<=8;k++) cx.lineTo(-46+k*11.5, 78+hash(k*7)*10-5);
+  cx.lineTo(46,102+rage*8);
+  for(let k=8;k>=0;k--) cx.lineTo(-46+k*11.5, 102+hash(k*13)*12-6+rage*8);
+  cx.closePath(); cx.fill();
+  cx.fillStyle="#b9ae97";
+  for(let k=0;k<7;k++){
+    const x=-40+k*13+hash(k*5)*4;
+    cx.beginPath(); cx.moveTo(x,80); cx.lineTo(x+7,80); cx.lineTo(x+3,88+hash(k)*7);
+    cx.closePath(); cx.fill();
+  }
+  cx.restore();
+}
+function drawScareFace(t){
+  // the mask, lunging out of the cable wall
+  if(Math.random()<.15){ // occasional full-interference strobe frame
+    drawStatic(.6,3);
+    text("HE IS IN THE SIGNAL", W/2, H-46, 26, "#f33", "center");
+    return;
+  }
+  drawCableWall(1,3);
+  const jx=rnd(-12,12)*Math.min(1,t*2+.3), jy=rnd(-8,8)*Math.min(1,t*2+.3);
+  const s=Math.min(.9+t*.7, 2.2)*1.5*(1+Math.sin(t*23)*.03);
+  drawMask(W/2+jx, H/2-30+jy, s, clamp(.3+t*.5,0,1));
   // slice displacement
   for(let i=0;i<10;i++){
     const y=ri(0,H-8), hgt=ri(2,8);
@@ -1069,7 +1267,7 @@ function drawScareFace(t){
       cx.drawImage(cv, sx,0,w,H, sx,ri(2,10+24*c),w,H);
     }
   }
-  if(Math.random()<.4) drawStatic(.25,4);
+  drawGrain(.22);
   text("HE IS IN THE SIGNAL", W/2, H-46, 26, "#f33", "center");
 }
 
@@ -1353,7 +1551,19 @@ function chButtons(tNow){
   const eyeY=my-120+headFloat, look=bad?((performance.now()/700)%2<1?-10:10):0;
   cx.beginPath(); cx.arc(mx-20+look,eyeY,bad?14:8,0,7); cx.fill();
   cx.beginPath(); cx.arc(mx+20+look,eyeY,bad?14:8,0,7); cx.fill();
-  if(bad){ cx.fillStyle="#fff"; cx.fillRect(mx-22+look,eyeY-2,3,3); cx.fillRect(mx+18+look,eyeY-2,3,3); }
+  if(bad){
+    cx.fillStyle="#fff"; cx.fillRect(mx-22+look,eyeY-2,3,3); cx.fillRect(mx+18+look,eyeY-2,3,3);
+    // porcelain cracks and something dark running from under the buttons
+    drawCracks(mx,my,86,6,7.7);
+    drawCracks(mx,my-110+headFloat,54,5,9.2);
+    cx.strokeStyle="rgba(110,10,10,.6)"; cx.lineWidth=2; cx.lineCap="round";
+    for(const sd of [-1,1]){
+      cx.beginPath();
+      cx.moveTo(mx+sd*20+look, eyeY+14);
+      cx.quadraticCurveTo(mx+sd*20+look+sd*2, eyeY+30, mx+sd*22+look, eyeY+46);
+      cx.stroke();
+    }
+  }
   // mouth
   cx.strokeStyle=bad?"#000":"#222"; cx.lineWidth=4;
   cx.beginPath();
@@ -1460,7 +1670,12 @@ function drawEAS(tNow){
 function drawDead(tNow){
   cx.fillStyle="#000"; cx.fillRect(0,0,W,H);
   if(tNow<1.2){ drawStatic(1,2); return; }
-  drawStatic(.06,4);
+  drawStatic(.06,4); // putImageData replaces pixels — static must go under the wall
+  drawCableWall(clamp((tNow-1.2)/3,0,.8), 8);
+  // it stays in the corner of the frame, watching you read your own obituary
+  cx.save(); cx.globalAlpha=clamp((tNow-2)/4,0,.85);
+  drawMask(W*.8, H*.42, .55, .25);
+  cx.restore(); cx.globalAlpha=1;
   text("SIGNAL LOST", W/2, 120, 44, "#f44", "center");
   text("OPERATOR #7 — SHIFT TERMINATED "+fmtClock(), W/2, 200, 18, "#a66","center");
   text("CAUSE: "+deathCause, W/2, 236, 16, "#e88","center");
@@ -1542,13 +1757,10 @@ function drawAnomalyOverlay(a){
     drawFigure(W*(.25+Math.sin(a.age*.4)*.1)+sev*W*.3, H*.6, .5+sev*1.1, .5+sev*.5);
   }
   if(a.kind==="face" && (Math.floor(performance.now()/300)%3!==0)){
-    cx.save(); cx.globalAlpha=.12+sev*.5; cx.translate(W/2,H/2); cx.scale(.6+sev,.6+sev);
-    cx.fillStyle="#ddd0c0"; cx.beginPath(); cx.ellipse(0,0,90,120,0,0,7); cx.fill();
-    cx.fillStyle="#000";
-    cx.beginPath(); cx.ellipse(-32,-24,16,26,0,0,7); cx.fill();
-    cx.beginPath(); cx.ellipse(30,-28,15,30,0,0,7); cx.fill();
-    cx.beginPath(); cx.ellipse(0,52,40,18+sev*26,0,0,7); cx.fill();
+    cx.save(); cx.globalAlpha=.12+sev*.55;
+    drawMask(W/2, H/2, .55+sev*.85, sev*.7);
     cx.restore();
+    cx.globalAlpha=1;
   }
   if(a.kind==="text" && Math.random()<.5){
     const msgs=["LET ME OUT","WHO TOLD YOU TO WATCH","I CAN SEE THE BOOTH","OPEN THE TRANSMITTER ROOM","YOU ARE ON CAMERA TOO"];
@@ -1634,6 +1846,7 @@ function frame(now){
       if(state!==ST.PLAY) break; // the board may have died
       scriptTick();
       if(state!==ST.PLAY) break;
+      ambienceTick(dt);
       drawPlayChannel(tNow);
       if(tuneOn) drawTuner();
       // the phone, if it's ringing
@@ -1724,6 +1937,9 @@ function frame(now){
 
   // ambient flicker rises with the threat
   if(Math.random()<.02+threat*.02) flickerEl.style.opacity=rnd(0,.05+threat*.04);
+  // the screen itself breathes with the ambience
+  vigEl.style.opacity = (state===ST.PLAY && threat>.3)
+    ? 1-(threat*.16)*(.5+.5*Math.sin(now/1000*1.76)) : 1;
 
   requestAnimationFrame(frame);
 }
@@ -1736,12 +1952,16 @@ function drawPlayChannel(tNow){
     case 5: chButtons(tNow); break;
     case 6:
       drawStatic(1,3);
+      // after 3:30 the static thins and you can see what channel six really is
+      if(gameMin>210) drawCableWall(clamp((gameMin-210)/150,0,.55), 5);
       // channel six is where the last operator went
       if(gameMin>90){
         cx.fillStyle="rgba(0,0,0,.45)"; cx.fillRect(0,0,W,H);
         // he turns to face you a little more every hour
         const opFacing=clamp((gameMin-120)/240,0,1);
         drawFigure(W/2, H*.62, 1.05, .75, opFacing);
+        // once he has fully turned, he no longer has his face
+        if(opFacing>.9) drawMask(W/2, H*.62-108, .22, .3);
         if(opFacing>.85 && Math.random()<.008) say("he sees you seeing him.",3);
       }
       if(gameMin>150 && Math.random()<.03)
@@ -1778,6 +1998,30 @@ function drawPlayChannel(tNow){
     text("DOOR — FLOOD (F) — "+Math.max(0,doorWindow-doorT).toFixed(0)+"s",
       W/2, 76, 26, (Math.floor(performance.now()/300)%2)?"#f44":"#fa8","center");
     shake=Math.max(shake,p*.25);
+  }
+  // grit: grime blooming in the corners, something dark running from the top edge
+  if(threat>.5){
+    for(const [gx,gy] of [[40,40],[W-60,H-80],[80,H-40]]){
+      const gg=cx.createRadialGradient(gx,gy,10,gx,gy,150);
+      gg.addColorStop(0,"rgba(12,7,5,"+((threat-.5)*.55).toFixed(3)+")");
+      gg.addColorStop(1,"rgba(0,0,0,0)");
+      cx.fillStyle=gg; cx.fillRect(gx-150,gy-150,300,300);
+    }
+  }
+  if(threat>.6){
+    const slot=Math.floor(gameMin/8);
+    const n=2+Math.floor(threat*2);
+    for(let i=0;i<n;i++){
+      const dx=hash(i*9.1+slot)*W;
+      const len=(40+hash(i*3.7+slot)*160)*threat + Math.min(60,(gameMin%8)*10);
+      const dg=cx.createLinearGradient(dx,0,dx,len);
+      dg.addColorStop(0,"rgba(80,8,10,.55)");
+      dg.addColorStop(1,"rgba(80,8,10,0)");
+      cx.fillStyle=dg;
+      cx.fillRect(dx,0,1.6+hash(i*7.3)*1.8,len);
+      cx.fillStyle="rgba(80,8,10,.5)";
+      cx.beginPath(); cx.arc(dx+1.2,len,2.2,0,7); cx.fill();
+    }
   }
   // ambient wear: late-night degradation everywhere
   const hour=gameMin/60;
