@@ -92,6 +92,16 @@
     text-shadow:0 0 6px rgba(255,176,0,.7);
     letter-spacing:.15em;
   }
+  #powerbar{
+    position:absolute;left:4%;bottom:2.5%;z-index:9;pointer-events:none;
+    color:var(--phosphor);
+    font-size:clamp(10px,2.2vh,20px);
+    font-weight:bold;
+    text-shadow:0 0 6px rgba(120,255,120,.8);
+    letter-spacing:.08em;
+    white-space:pre;
+  }
+  #powerbar.low{ color:#ff5544; text-shadow:0 0 8px rgba(255,60,40,.8); }
   .hidden{display:none !important;}
 </style>
 </head>
@@ -107,6 +117,7 @@
     <div id="osdclock"></div>
     <div id="subtitle"></div>
     <div id="trackbar"></div>
+    <div id="powerbar"></div>
   </div>
 </div>
 <script>
@@ -125,6 +136,7 @@ const osdclock = document.getElementById("osdclock");
 const subEl = document.getElementById("subtitle");
 const trackEl = document.getElementById("trackbar");
 const flickerEl = document.getElementById("flicker");
+const powerEl = document.getElementById("powerbar");
 
 /* ---------- utility ---------- */
 const rnd = (a=1,b) => b===undefined ? Math.random()*a : a+Math.random()*(b-a);
@@ -304,6 +316,50 @@ function silenceScare(){
     if(state===ST.PLAY) say("—it was RIGHT THERE—",2.5);
   },1700);
 }
+function footstep(vol=.2){
+  if(!AC) return;
+  const o=AC.createOscillator(),g=AC.createGain(),f=AC.createBiquadFilter();
+  o.type="sine"; o.frequency.setValueAtTime(44,AC.currentTime);
+  o.frequency.exponentialRampToValueAtTime(28,AC.currentTime+.18);
+  f.type="lowpass"; f.frequency.value=90;
+  g.gain.setValueAtTime(vol,AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(.0001,AC.currentTime+.25);
+  o.connect(f).connect(g).connect(master);
+  o.start(); o.stop(AC.currentTime+.26);
+}
+function knock(){
+  if(!AC) return;
+  let t=AC.currentTime;
+  for(let k=0;k<3;k++){
+    const o=AC.createOscillator(),g=AC.createGain(),f=AC.createBiquadFilter();
+    o.type="triangle"; o.frequency.setValueAtTime(95,t+k*.28);
+    f.type="lowpass"; f.frequency.value=300;
+    g.gain.setValueAtTime(.28,t+k*.28);
+    g.gain.exponentialRampToValueAtTime(.0001,t+k*.28+.12);
+    o.connect(f).connect(g).connect(master);
+    o.start(t+k*.28); o.stop(t+k*.28+.13);
+  }
+}
+function advanceCue(stage){ // it moved closer — louder with each stage
+  if(!AC) return;
+  footstep(.12+stage*.09);
+  const n=AC.createBufferSource(); n.buffer=staticSrc.buffer;
+  const bp=AC.createBiquadFilter(); bp.type="bandpass"; bp.frequency.value=700; bp.Q.value=7;
+  const g=AC.createGain();
+  g.gain.setValueAtTime(.0001,AC.currentTime);
+  g.gain.linearRampToValueAtTime(.05+stage*.04,AC.currentTime+.4);
+  g.gain.exponentialRampToValueAtTime(.0001,AC.currentTime+1.3);
+  n.connect(bp).connect(g).connect(master); n.start(); n.stop(AC.currentTime+1.4);
+}
+function floodBlast(){
+  if(!AC) return;
+  const n=AC.createBufferSource(); n.buffer=staticSrc.buffer;
+  const g=AC.createGain();
+  g.gain.setValueAtTime(.55,AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(.0001,AC.currentTime+.8);
+  n.connect(g).connect(master); n.start(); n.stop(AC.currentTime+.85);
+  beep(70,.6,.2,"sawtooth");
+}
 
 /* ---------- MOSH studio intro audio ---------- */
 let studioNodes=[];
@@ -365,16 +421,22 @@ function stopStudioAudio(){
 }
 
 /* ---------- game state ---------- */
-const ST = { BOOT:0, STUDIO:1, MENU:2, INTRO:3, PLAY:4, EAS:5, SCARE:6, DEAD:7, WIN:8 };
+const ST = { BOOT:0, STUDIO:1, MENU:2, INTRO:3, PLAY:4, EAS:5, SCARE:6, DEAD:7, WIN:8, BLACKOUT:9 };
 let state = ST.BOOT;
 let stateT = 0;             // seconds in current state
 let gameMin = 0;            // minutes since 12:00 AM (1 real sec = 1 game min)
 const NIGHT_END = 360;      // 6:00 AM
 let channel = 1;
-let anomalies = {};         // ch -> {age,kind,resp,fuse,trackTime,warned}
+let anomalies = {};         // ch -> {age,kind,resp,fuse,lockNeed,warned}
 let strikes = 0;
-let tracking = false;
-let trackProgress = 0, slipT = 0;
+// tuner minigame
+let tuneOn=false, needle=.5, needleV=0, band=.5, bandW=.16, bandTo=.5, lock=0, invertT=0, lunged={};
+// power (the FNAF resource)
+let power = 100, blackT = 0;
+// the entity walking the station: 0 LOT → 1 HALL → 2 DOOR → 3 BOOTH
+const EPOS = ["LOT","HALL","DOOR","BOOTH"];
+let entityPos = 0, entityTimer = 55, doorT = -1, doorWindow = 8;
+let deathCause = "";
 let threat = 0;             // 0..1, drives dread + entity closeness
 let dread = 0;              // extra threat from bad choices, decays
 let ch6Heat = 0, ch6WatchT = 0, ch6Total = 0;
@@ -395,9 +457,10 @@ function say(text, dur=4){ sub=text; subT=dur; }
 function addLog(s){ logLines.push(s); if(logLines.length>4) logLines.shift(); }
 function loadLastGrade(){ try{ return localStorage.getItem("deadair_last"); }catch(e){ return null; } }
 function finishGrade(alive){
+  const score = integrity + power*.1; // frugality pays
   const g = !alive ? "F"
-    : integrity>=92 ? "S" : integrity>=80 ? "A" : integrity>=65 ? "B"
-    : integrity>=45 ? "C" : "D";
+    : score>=95 ? "S" : score>=82 ? "A" : score>=66 ? "B"
+    : score>=46 ? "C" : "D";
   try{ localStorage.setItem("deadair_last",g); }catch(e){}
   return g;
 }
@@ -422,14 +485,12 @@ window.addEventListener("keydown", e=>{
   if(state===ST.PLAY||state===ST.EAS){
     const n = parseInt(e.key,10);
     if(n>=1&&n<=6&&state===ST.PLAY){ switchChannel(n); }
-    if(e.code==="Space"){ tracking=true; }
+    if(e.code==="Space" && state===ST.PLAY){ toggleTuner(); e.preventDefault?.(); }
+    if(e.code==="KeyF" && state===ST.PLAY){ signalFlood(); }
     if(e.code==="KeyE" && state===ST.PLAY && phoneRingT>=0){ answerPhone(); }
   }
 });
-window.addEventListener("keyup", e=>{
-  keys[e.code]=false;
-  if(e.code==="Space"){ tracking=false; trackProgress=Math.max(0,trackProgress-0.4); }
-});
+window.addEventListener("keyup", e=>{ keys[e.code]=false; });
 window.addEventListener("pointerdown", ()=>{
   initAudio();
   if(AC.state==="suspended") AC.resume();
@@ -440,6 +501,7 @@ function switchChannel(n){
   if(n===channel) return;
   channel=n;
   ch6WatchT=0;
+  tuneOn=false; lock=0; lunged={};
   noiseBurst=Math.max(noiseBurst,.9);
   beep(1200,.05,.08);
   setStaticLevel(.16);
@@ -452,7 +514,11 @@ function endStudio(){ stopStudioAudio(); state=ST.MENU; stateT=0; noiseBurst=1; 
 function startIntro(){ state=ST.INTRO; stateT=0; }
 function startNight(){
   state=ST.PLAY; stateT=0; gameMin=0; channel=1;
-  anomalies={}; strikes=0; threat=0; dread=0; tracking=false; trackProgress=0; slipT=0;
+  anomalies={}; strikes=0; threat=0; dread=0;
+  tuneOn=false; needle=.5; needleV=0; band=.5; bandTo=.5; bandW=.16; lock=0; invertT=0; lunged={};
+  power=100; blackT=0;
+  entityPos=0; entityTimer=rnd(45,70); doorT=-1; doorWindow=8;
+  deathCause="";
   ch6Heat=0; ch6WatchT=0; ch6Total=0;
   buttonsCorrupt=false; lastHour=0;
   activeCall=-1; phoneRingT=-1; logLines=[];
@@ -485,11 +551,11 @@ function spawnAnomaly(){
   const ch = candidates.includes(nextTarget) ? nextTarget : pick(candidates);
   const hour = gameMin/60;
   let resp="track", kind=pick(["figure","face","text","invert"]);
-  let fuse=32, trackTime=2.4, age=0;
+  let fuse=32, lockNeed=1.8, age=0;
   const roll=Math.random();
   if(hour>0.8 && roll<0.22){ resp="stare"; kind="stare"; fuse=26; age=7; }
-  else if(hour>1.6 && roll<0.40){ kind="surge"; fuse=10; trackTime=1.1; }
-  anomalies[ch]={age,kind,resp,fuse,trackTime,warned:false};
+  else if(hour>1.6 && roll<0.40){ kind="surge"; fuse=10; lockNeed=1.0; }
+  anomalies[ch]={age,kind,resp,fuse,lockNeed,warned:false};
   if(resp==="stare"){
     beep(160,.5,.06,"sine");
     say("something is watching from CH "+ch+". do not meet its eye.",4);
@@ -511,7 +577,7 @@ function failAnomaly(ch){
   stinger();
   addLog(fmtClock()+" CONTAINMENT FAILURE ("+strikes+"/3)");
   say(strikes<3 ? "IT MOVED CLOSER." : "", 3);
-  if(strikes>=3){ triggerScare(); return true; }
+  if(strikes>=3){ triggerScare("THREE FAILURES — IT FOUND THE BOOTH"); return true; }
   return false;
 }
 function anomalyTick(dt){
@@ -565,50 +631,152 @@ function anomalyTick(dt){
     setTimeout(()=>flickerEl.style.opacity=0,60);
   }
 
-  // channel 6: whisper bed, rising heat, and the intel trade
+  // channel 6: rising heat and the intel trade (whisper level set in entityTick)
   if(channel===6){
     ch6WatchT += dt; ch6Total += dt;
     ch6Heat = Math.min(.2, ch6Heat + dt*.012);
-    setWhisperLevel(clamp(ch6WatchT/5,0,1)*.14);
   } else {
     ch6WatchT=0;
-    setWhisperLevel(threat>.8 ? .03 : 0);
   }
 
-  // tracking clears trackable anomalies on the current channel
+  tuneTick(dt);
+  if(!tuneOn) updateStaticBed();
+}
+
+/* ---------- tuner minigame ---------- */
+function toggleTuner(){
   const a=anomalies[channel];
-  const trackable = a && a.resp==="track";
-  if(tracking && trackable && state===ST.PLAY){
-    setStaticLevel(.2);
-    if(slipT>0){
-      slipT -= dt;
-      trackProgress = Math.max(0, trackProgress - dt*.9);
-    } else {
-      trackProgress += dt/a.trackTime;
-      if(a.kind!=="surge" && Math.random()<dt*.45){
-        slipT=.35; screech(); noiseBurst=Math.max(noiseBurst,.5);
+  if(tuneOn){ tuneOn=false; lock=0; updateStaticBed(); return; }
+  if(!a || a.resp!=="track") return;
+  tuneOn=true; lock=0; lunged={};
+  needle=rnd(.15,.85); needleV=0;
+  band=rnd(.2,.8); bandTo=rnd(.2,.8);
+  bandW = a.kind==="surge" ? .2 : .14;
+  beep(1400,.06,.08);
+}
+function tuneTick(dt){
+  const a=anomalies[channel];
+  if(tuneOn && (!a || a.resp!=="track")){ tuneOn=false; lock=0; }
+  if(!tuneOn || state!==ST.PLAY) return;
+  const hour=gameMin/60;
+  setStaticLevel(.22);
+  power=Math.max(0,power-dt*1.5); // tuning is expensive
+
+  // the needle fights you: drift + jolts; the sweet spot relocates
+  const now=performance.now()/1000;
+  const drift=Math.sin(now*1.7)*.22+Math.sin(now*3.1+1.3)*.14;
+  const jolt=(a.kind==="surge"? .55 : .3);
+  if(Math.random()<dt*(a.kind==="surge"?2.2:1.1)) needleV += rnd(-jolt,jolt);
+  // input inversion windows after 3 AM
+  if(hour>3 && invertT<=0 && Math.random()<dt*.25) invertT=rnd(.5,.9);
+  invertT=Math.max(0,invertT-dt);
+  const dir=((keys["ArrowLeft"]||keys["KeyA"])?-1:0)+((keys["ArrowRight"]||keys["KeyD"])?1:0);
+  needleV += dir*(invertT>0?-1:1)*dt*2.6;
+  needleV *= Math.pow(.14,dt); // damping
+  needle = clamp(needle + needleV*dt*2.2 + drift*dt*.5, 0, 1);
+  if(needle<=0||needle>=1) needleV*=-.5;
+  if(Math.random()<dt*.5) bandTo=rnd(.12,.88);
+  band += clamp(bandTo-band,-dt*.22,dt*.22);
+
+  const inBand = Math.abs(needle-band) < bandW/2;
+  if(inBand){
+    lock += dt/a.lockNeed;
+    // it lunges at you as the lock closes — fear during the fix
+    for(const th of [.5,.85]){
+      if(lock>th && !lunged[th]){ lunged[th]=true; beep(140,.25,.14,"sawtooth"); shake=Math.max(shake,.5); noiseBurst=Math.max(noiseBurst,.6); }
+    }
+  } else {
+    if(lock>0 && Math.random()<dt*3) screech();
+    lock = Math.max(0, lock - dt*.55);
+  }
+  if(lock>=1){
+    delete anomalies[channel];
+    tuneOn=false; lock=0; noiseBurst=.8;
+    restoredCount++;
+    integrity=clamp(integrity+2,0,100);
+    beep(1600,.1,.1); beep(2100,.12,.1);
+    addLog(fmtClock()+" CH-"+channel+" RESTORED");
+    say("Signal restored.",2);
+    updateStaticBed();
+  }
+}
+
+/* ---------- the entity walks the station ---------- */
+function entityAggro(){ // interval scale: night hour + strikes
+  const hour=gameMin/60;
+  const base=lerp(1,.38,clamp(hour/5,0,1));
+  return base*Math.pow(.8,strikes);
+}
+function entityTick(dt){
+  if(entityPos<2){
+    entityTimer -= dt;
+    if(entityTimer<=0){
+      entityPos++;
+      entityTimer = rnd(45,70)*entityAggro();
+      advanceCue(entityPos);
+      noiseBurst=Math.max(noiseBurst,.3);
+      if(entityPos===1) say("something crossed the lot.",3);
+      if(entityPos===2){
+        doorT=0;
+        doorWindow = gameMin/60>3 ? rnd(4,6) : rnd(7,9);
+        knock();
+        say("IT IS AT THE BOOTH DOOR — FLOOD THE SIGNAL (F)",5);
+        addLog(fmtClock()+" DOOR CONTACT");
       }
     }
-    if(trackProgress>=1){
-      delete anomalies[channel];
-      trackProgress=0; slipT=0; noiseBurst=.8;
-      restoredCount++;
-      integrity=clamp(integrity+2,0,100);
-      beep(1600,.1,.1); beep(2100,.12,.1);
-      addLog(fmtClock()+" CH-"+channel+" RESTORED");
-      say("Signal restored.",2);
-      updateStaticBed();
-    }
-  } else if(!tracking && trackProgress>0){
-    trackProgress=Math.max(0,trackProgress-dt*.5);
+  } else if(entityPos===2){
+    doorT += dt;
+    if(doorT%2.2<dt) knock();
+    if(doorT>doorWindow){ triggerScare("IT CAME THROUGH THE DOOR"); }
   }
-  if(!tracking) updateStaticBed();
+  setWhisperLevel(Math.max(whisperTarget(), entityPos===2?.12:entityPos===1?.05:0));
+}
+function whisperTarget(){
+  return channel===6 ? clamp(ch6WatchT/5,0,1)*.14 : (threat>.8?.03:0);
+}
+function signalFlood(){
+  if(power<10){ say("not enough power to flood.",2.5); beep(120,.3,.08); return; }
+  power-=10;
+  floodBlast(); noiseBurst=1; shake=.7;
+  if(entityPos>=1){
+    const back=ri(1,2);
+    entityPos=Math.max(0,entityPos-back);
+    doorT=-1;
+    entityTimer=rnd(45,70)*entityAggro();
+    say("the flood drove it back to the "+EPOS[entityPos]+".",3.5);
+    addLog(fmtClock()+" SIGNAL FLOOD — REPELLED");
+  } else {
+    say("the flood hit an empty lot. wasted power.",3.5);
+    addLog(fmtClock()+" SIGNAL FLOOD — NO CONTACT");
+  }
+}
+
+/* ---------- power ---------- */
+function powerTick(dt){
+  power=Math.max(0,power-dt*.24);
+  // the board browns out as power falls
+  const dim = power>40 ? 1 : lerp(.55,1,clamp(power/40,0,1));
+  if(master && state===ST.PLAY) master.gain.setTargetAtTime(.7*dim, AC.currentTime, .5);
+  if(power<=0 && state===ST.PLAY){
+    if(gameMin>=348){ // dawn saves you at the door of 6 AM
+      integrity=Math.min(integrity,60); // grade capped ~C
+      finalGrade=finishGrade(true);
+      state=ST.WIN; winT=0;
+      easTone(false); setDroneLevel(0); setWhisperLevel(0); setStaticLevel(.02);
+      say("the board died at dawn. close.",4);
+      return;
+    }
+    state=ST.BLACKOUT; blackT=0;
+    easTone(false); setStaticLevel(0); setDroneLevel(.06); setWhisperLevel(.08);
+    tuneOn=false; phoneRingT=-1;
+    addLog(fmtClock()+" POWER FAILURE");
+  }
 }
 
 /* ---------- scripted events ---------- */
 const HOURLINES = {
   1:"1 AM. five hours left. the building settles.",
-  2:"2 AM. the fog is against the glass.",
+  2:"2 AM. the fog is against the glass. so is something.",
   3:"3 AM. the dead hour. it is strongest now.",
   4:"4 AM. you heard your name in the static.",
   5:"5 AM. almost. do not relax.",
@@ -646,7 +814,7 @@ function buildEvents(){
       noiseBurst=1; shake=.6; stinger();
       say("ALL FEEDS DROPPED — 4:10 AM", 4);
       for(const c of [1,2,3]) if(!anomalies[c])
-        anomalies[c]={age:0,kind:pick(["figure","surge"]),resp:"track",fuse:c===1?10:32,trackTime:c===1?1.1:2.4,warned:false};
+        anomalies[c]={age:0,kind:pick(["figure","surge"]),resp:"track",fuse:c===1?10:32,lockNeed:c===1?1.0:1.8,warned:false};
       addLog("04:10 MULTIPLE INTRUSIONS");
     }},
     {t:290, fn:silenceScare},
@@ -688,6 +856,7 @@ function missCall(){
 function answerPhone(){
   const c=CALLS[activeCall];
   phoneRingT=-1; activeCall=-1;
+  power=Math.max(0,power-2); // the line draws from the board
   if(c.evil){
     stinger(); shake=1; dread+=.22;
     integrity=clamp(integrity-8,0,100);
@@ -704,9 +873,11 @@ function answerPhone(){
     else clearInterval(iv);
   },4500);
 }
-function triggerScare(){
+function triggerScare(cause){
+  deathCause = cause || "THE SIGNAL COLLAPSED";
   finalGrade=finishGrade(false);
   state=ST.SCARE; scareT=0;
+  tuneOn=false;
   stinger(); scream();
   setStaticLevel(.5); setDroneLevel(.3); setWhisperLevel(0);
   flickerEl.style.opacity=.9;
@@ -1124,14 +1295,16 @@ function chCamera(name, seed){
   const hour=gameMin/60;
   // eyes open in the dark doorway
   if(seed===4 && hour>1) drawWatcher(W*.5, H*.55, 1+Math.floor(hour), threat);
-  // the Tall One lurks; later it stands far too close to the lens
-  if(hour>1.5 && Math.sin(performance.now()/4000+seed*7)>.55){
-    const prog=clamp((hour-1.5)/4.5,0,1);
-    drawFigure(seed===3? 520-prog*180 : W*.5, seed===3? 300 : H*.55, .35+prog*.5, .55+prog*.35);
+  // the cameras are how you track it: LOT shows on cam A, HALL on cam B
+  if(seed===3 && entityPos===0){
+    const drift=Math.sin(performance.now()/6000)*.5+.5;
+    drawFigure(500-drift*160, 300, .4+drift*.15, .6+threat*.25);
   }
-  if(hour>2.5 && Math.sin(performance.now()/9000+seed*3)>.88){
-    drawFigure(seed===3?150:W*.62, H*.9, 1.7, .85);
+  if(seed===4 && entityPos===1){
+    const close=clamp(1-entityTimer/60,0,1); // creeps toward the lens as its timer runs down
+    drawFigure(W*.5, H*.55+close*H*.25, .5+close*1.0, .65+close*.3);
   }
+  // when it's at the DOOR, the cameras show empty rooms. that is the warning.
   // the crawler skitters through in stop motion
   if(hour>2 && Math.sin(performance.now()/7000+seed*5)>.7){
     const cxr=((performance.now()/28)%(W+360))-180;
@@ -1223,14 +1396,14 @@ function drawMenu(tNow){
   text("D E A D   A I R", W/2, 132, 52, "#dfd", "center");
   text("overnight master control — shift 12:00 AM → 6:00 AM", W/2, 206, 16, "#8a8", "center");
   const rules=[
-    "1–6 ......... switch channel",
-    "SPACE ....... hold to re-track a corrupted feed",
-    "E ........... answer the phone — or don't",
+    "1–6 ..... switch channel      E ..... the phone",
+    "SPACE ... engage tracking, steer with ◄ ►",
+    "F ....... SIGNAL FLOOD — repels it. costs power.",
     "",
-    "some things must NOT be watched. look away.",
-    "three failures and it reaches master control.",
+    "the cameras show where it is. the power is finite.",
+    "if it reaches the booth door, FLOOD or die.",
   ];
-  rules.forEach((r,i)=>text(r, W/2-210, 254+i*26, 16, "#bdb"));
+  rules.forEach((r,i)=>text(r, W/2-210, 254+i*24, 15, "#bdb"));
   const g=loadLastGrade();
   if(g) text("LAST SHIFT GRADE: "+g, W/2, H-108, 16, g==="F"?"#f66":"#ff8","center");
   if(Math.floor(tNow*1.4)%2===0) text("— PRESS ANY KEY TO CLOCK IN —", W/2, H-64, 20, "#ff8", "center");
@@ -1246,16 +1419,18 @@ function drawIntro(tNow){
     "Between sign-off and sunrise, the transmitter",
     "must never carry an uncorrected signal.",
     "",
-    "If a channel degrades: tune to it and HOLD SPACE",
-    "until tracking is restored.",
+    "If a channel degrades: press SPACE and steer the",
+    "tracking needle (◄ ►) into the band until LOCK.",
     "",
     "If the interference WATCHES BACK: cut away.",
     "Attention feeds it. Starve it and it settles.",
     "",
-    "After midnight the phone may ring.",
-    "Not every caller is staff. Listen to the ring.",
+    "IT IS NOT ONLY INSIDE THE SIGNAL.",
+    "IT USES THE HALLWAYS. Watch the cameras.",
+    "If it reaches your door: FLOOD THE SIGNAL (F).",
     "",
-    "The previous operator stopped listening.",
+    "The board runs on backup power. Everything costs.",
+    "If the power dies before dawn, sit very still.",
   ];
   const shown=Math.min(lines.length, Math.floor(tNow*2.8));
   for(let i=0;i<shown;i++) text(lines[i], 60, 44+i*24, 16, i>=10?"#e88":"#9d9");
@@ -1275,7 +1450,7 @@ function drawEAS(tNow){
     "",
     "DO NOT ADJUST YOUR SET.",
     "DO NOT TURN OFF YOUR SET.",
-    "IT USES THE DARK BEHIND THE GLASS.",
+    "IT USES THE DARK. IT USES THE HALLWAYS.",
     "",
     "STATION PERSONNEL: REMAIN AT YOUR POST.",
     "YOUR POST IS AWARE OF YOU.",
@@ -1289,11 +1464,12 @@ function drawDead(tNow){
   cx.fillStyle="#000"; cx.fillRect(0,0,W,H);
   if(tNow<1.2){ drawStatic(1,2); return; }
   drawStatic(.06,4);
-  text("SIGNAL LOST", W/2, 130, 44, "#f44", "center");
-  text("OPERATOR #7 — SHIFT TERMINATED "+fmtClock(), W/2, 210, 18, "#a66","center");
-  text("SHIFT GRADE: F", W/2, 252, 22, "#f66","center");
-  text("signal integrity at loss: "+Math.round(integrity)+"%", W/2, 292, 14, "#866","center");
-  text("the tape keeps recording", W/2, 330, 15, "#644","center");
+  text("SIGNAL LOST", W/2, 120, 44, "#f44", "center");
+  text("OPERATOR #7 — SHIFT TERMINATED "+fmtClock(), W/2, 200, 18, "#a66","center");
+  text("CAUSE: "+deathCause, W/2, 236, 16, "#e88","center");
+  text("SHIFT GRADE: F", W/2, 272, 22, "#f66","center");
+  text("integrity "+Math.round(integrity)+"%  ·  power "+Math.round(power)+"%", W/2, 308, 14, "#866","center");
+  text("the tape keeps recording", W/2, 340, 15, "#644","center");
   if(tNow>4 && Math.floor(tNow*1.4)%2===0)
     text("press any key", W/2, H-70, 16, "#886","center");
 }
@@ -1311,8 +1487,8 @@ function drawWin(tNow){
     text(finalGrade, W/2, 192, 64, finalGrade==="S"?"#8f8":"#ffe","center");
   }
   if(tNow>4){
-    text("signal integrity "+Math.round(integrity)+"%   ·   feeds restored "+restoredCount, W/2, 280, 15, "#aab","center");
-    text("failures "+strikes+"/3   ·   "+Math.round(ch6Total)+"s spent on channel six", W/2, 306, 15, "#aab","center");
+    text("signal integrity "+Math.round(integrity)+"%   ·   power remaining "+Math.round(power)+"%", W/2, 280, 15, "#aab","center");
+    text("feeds restored "+restoredCount+"   ·   failures "+strikes+"/3   ·   ch6 "+Math.round(ch6Total)+"s", W/2, 306, 15, "#aab","center");
     text("see you tomorrow night, operator.", W/2, 344, 17, "#e99","center");
   }
   if(tNow>6){
@@ -1385,6 +1561,46 @@ function drawAnomalyOverlay(a){
   if(Math.random()<sev*.4) drawStatic(.2,4);
 }
 
+/* ---------- tuner overlay ---------- */
+function drawTuner(){
+  const a=anomalies[channel];
+  if(!a) return;
+  const px=W*.08, pw=W*.84, py=H*.70, ph=H*.20;
+  cx.fillStyle="rgba(0,0,0,.72)"; cx.fillRect(px-10,py-34,pw+20,ph+44);
+  cx.strokeStyle="rgba(140,255,140,.5)"; cx.lineWidth=2;
+  cx.strokeRect(px-10,py-34,pw+20,ph+44);
+  text("MANUAL TRACKING — STEER ◄ ► INTO THE BAND", px, py-28, 14, invertT>0?"#f55":"#9f9");
+  if(invertT>0) text("►◄ INVERTED", px+pw-130, py-28, 14, "#f55");
+  // rail
+  const railY=py+ph*.42;
+  cx.strokeStyle="#4a5a4a"; cx.lineWidth=3;
+  cx.beginPath(); cx.moveTo(px,railY); cx.lineTo(px+pw,railY); cx.stroke();
+  for(let i=0;i<=20;i++){
+    cx.fillStyle="#3a463a";
+    cx.fillRect(px+i*(pw/20)-1, railY-6, 2, 12);
+  }
+  // sweet spot band
+  const bx=px+(band-bandW/2)*pw, bw2=bandW*pw;
+  const inBand=Math.abs(needle-band)<bandW/2;
+  cx.fillStyle=inBand?"rgba(120,255,120,.30)":"rgba(120,255,120,.14)";
+  cx.fillRect(bx,railY-20,bw2,40);
+  cx.strokeStyle=inBand?"#8f8":"#4a6a4a"; cx.lineWidth=1.5;
+  cx.strokeRect(bx,railY-20,bw2,40);
+  // needle
+  const nx=px+needle*pw+rnd(-1.5,1.5);
+  cx.strokeStyle="#ffb000"; cx.lineWidth=3;
+  cx.beginPath(); cx.moveTo(nx,railY-26); cx.lineTo(nx,railY+26); cx.stroke();
+  cx.fillStyle="#ffb000";
+  cx.beginPath(); cx.moveTo(nx-6,railY-32); cx.lineTo(nx+6,railY-32); cx.lineTo(nx,railY-24); cx.closePath(); cx.fill();
+  // lock bar
+  const ly=py+ph*.78;
+  cx.fillStyle="#222"; cx.fillRect(px,ly,pw,10);
+  cx.fillStyle=lock>0?"#8f8":"#444";
+  cx.fillRect(px,ly,pw*clamp(lock,0,1),10);
+  text("LOCK "+Math.floor(clamp(lock,0,1)*100)+"%", px, ly+14, 13, "#9f9");
+  text("FUSE "+Math.max(0,a.fuse-a.age).toFixed(0)+"s", px+pw-90, ly+14, 13, a.age>a.fuse*.68?"#f55":"#aa8");
+}
+
 /* ---------- main loop ---------- */
 let last=performance.now();
 function frame(now){
@@ -1415,9 +1631,14 @@ function frame(now){
       gameMin+=dt;
       anomalyTick(dt);
       if(state!==ST.PLAY) break; // a strike may have triggered the scare
+      entityTick(dt);
+      if(state!==ST.PLAY) break; // the door may have given way
+      powerTick(dt);
+      if(state!==ST.PLAY) break; // the board may have died
       scriptTick();
       if(state!==ST.PLAY) break;
       drawPlayChannel(tNow);
+      if(tuneOn) drawTuner();
       // the phone, if it's ringing
       if(phoneRingT>=0){
         const evil=CALLS[activeCall].evil;
@@ -1432,9 +1653,42 @@ function frame(now){
       if(sublimT>0) drawScareFace(.2);
       break;
     case ST.SCARE:
-      scareT+=dt; drawScareFace(scareT);
-      if(scareT>2.6){ state=ST.DEAD; deadT=0; setStaticLevel(.02); setDroneLevel(0); }
+      scareT+=dt;
+      if(scareT<.35){
+        // the door-burst: it snaps up from the bottom of the frame
+        cx.fillStyle="#000"; cx.fillRect(0,0,W,H);
+        const up=scareT/.35;
+        drawFigure(W/2+rnd(-10,10), H+140-up*260, 2.4, .95);
+        shake=1;
+      } else drawScareFace(scareT-.35);
+      if(scareT>2.9){ state=ST.DEAD; deadT=0; setStaticLevel(.02); setDroneLevel(0); }
       break;
+    case ST.BLACKOUT: {
+      blackT+=dt; gameMin+=dt;
+      cx.fillStyle="#000"; cx.fillRect(0,0,W,H);
+      // dawn can still save you if it was close
+      if(gameMin>=NIGHT_END){
+        integrity=Math.min(integrity,60);
+        finalGrade=finishGrade(true);
+        state=ST.WIN; winT=0; setDroneLevel(0); setWhisperLevel(0);
+        break;
+      }
+      if(blackT<1) { /* pure dark, pure silence */ }
+      if(blackT>1 && blackT%1.4<dt) footstep(.14+blackT*.03);
+      // two eyes fade in from the dark
+      if(blackT>3){
+        const a=clamp((blackT-3)/5,0,1);
+        const eb=Math.sin(performance.now()/1500)>.95?0:1;
+        cx.fillStyle="rgba(225,238,215,"+(a*.85*eb)+")";
+        const drift=(blackT-3)*6;
+        cx.fillRect(W/2-14,H*.42-drift*.4,5,5);
+        cx.fillRect(W/2+9,H*.42-drift*.4,5,5);
+      }
+      if(blackT>2 && Math.floor(blackT*1.2)%3===0)
+        text("POWER FAILURE", W/2, H*.14, 22, "rgba(255,60,40,.5)","center");
+      if(blackT>8.5) triggerScare("THE POWER RAN OUT");
+      break;
+    }
     case ST.DEAD: deadT+=dt; drawDead(deadT); break;
     case ST.WIN: winT+=dt; drawWin(winT); break;
   }
@@ -1456,15 +1710,20 @@ function frame(now){
   let trackMsg="";
   if(state===ST.PLAY){
     const a=anomalies[channel];
-    if(a && a.resp==="stare") trackMsg="⚠ DO NOT OBSERVE — LOOK AWAY ⚠";
-    else if(tracking && a) trackMsg = slipT>0
-      ? "TRACKING [ SLIPPING ]"
-      : "TRACKING ["+("█".repeat(Math.floor(trackProgress*20)).padEnd(20,"░"))+"]";
+    if(entityPos===2 && !tuneOn) trackMsg="⚠ IT IS AT THE DOOR — PRESS F ⚠";
+    else if(a && a.resp==="stare") trackMsg="⚠ DO NOT OBSERVE — LOOK AWAY ⚠";
+    else if(tuneOn) trackMsg="◄ ► STEER THE NEEDLE — SPACE TO ABORT";
     else if(a) trackMsg = a.kind==="surge"
-      ? "⚠ SURGE — HOLD SPACE — "+Math.max(0,a.fuse-a.age).toFixed(0)+"s"
-      : "HOLD SPACE TO RE-TRACK";
+      ? "⚠ SURGE — SPACE TO TRACK — "+Math.max(0,a.fuse-a.age).toFixed(0)+"s"
+      : "SPACE — ENGAGE MANUAL TRACKING";
   }
   trackEl.textContent=trackMsg;
+  // power bar
+  if(state===ST.PLAY||state===ST.EAS){
+    const segs="▮".repeat(Math.ceil(clamp(power,0,100)/10)).padEnd(10,"▯");
+    powerEl.textContent="PWR "+segs+" "+Math.round(power)+"%";
+    powerEl.className = power<25 ? "low" : "";
+  } else powerEl.textContent="";
 
   // ambient flicker rises with the threat
   if(Math.random()<.02+threat*.02) flickerEl.style.opacity=rnd(0,.05+threat*.04);
@@ -1496,20 +1755,68 @@ function drawPlayChannel(tNow){
       break;
   }
   if(anomalies[channel]) drawAnomalyOverlay(anomalies[channel]);
+  // it is at the door: a dark mass bleeds into every channel's frame
+  if(entityPos===2){
+    const p=clamp(doorT/doorWindow,0,1);
+    const g=cx.createLinearGradient(W,0,W-180-p*140,0);
+    g.addColorStop(0,"rgba(0,0,0,"+(.85+p*.15)+")");
+    g.addColorStop(1,"rgba(0,0,0,0)");
+    cx.fillStyle=g; cx.fillRect(W-330,0,330,H);
+    // pale fingers curling around the frame edge
+    cx.strokeStyle="rgba(190,200,180,"+(.35+p*.45)+")"; cx.lineWidth=6; cx.lineCap="round";
+    for(let f=0;f<5;f++){
+      const fy=H*.3+f*34;
+      cx.beginPath(); cx.moveTo(W,fy);
+      cx.quadraticCurveTo(W-34-p*54, fy+8, W-28-p*66, fy+22); cx.stroke();
+    }
+    // one eye in the dark at the frame edge
+    if(Math.sin(performance.now()/1000)<.85){
+      cx.fillStyle="rgba(225,238,215,"+(.5+p*.4)+")";
+      cx.fillRect(W-28-p*40, H*.24, 5, 5);
+    }
+    // red alarm pulse
+    const pulse=.10+Math.abs(Math.sin(performance.now()/160))*.14*(0.4+p);
+    cx.strokeStyle="rgba(255,40,40,"+pulse+")"; cx.lineWidth=14;
+    cx.strokeRect(7,7,W-14,H-14);
+    text("DOOR — FLOOD (F) — "+Math.max(0,doorWindow-doorT).toFixed(0)+"s",
+      W/2, 76, 26, (Math.floor(performance.now()/300)%2)?"#f44":"#fa8","center");
+    shake=Math.max(shake,p*.25);
+  }
   // ambient wear: late-night degradation everywhere
   const hour=gameMin/60;
   if(hour>2) trackingLines(clamp((hour-2)/8,.05,.4)+threat*.1);
-  drawGrain(.04+threat*.05);
+  drawGrain(.04+threat*.05 + (power<25 ? (25-power)*.004 : 0));
+  // brown-out dimming
+  if(power<40){
+    cx.fillStyle="rgba(0,0,0,"+((40-power)/40*.38)+")";
+    cx.fillRect(0,0,W,H);
+  }
 }
 requestAnimationFrame(frame);
 
 /* debug hook for automated testing (harmless in play) */
 window.__dbg={
   get state(){return state;},
-  ff:m=>{gameMin=m;},
+  ff:m=>{ // debug time-jump: skip, don't replay, the scripted beats in between
+    gameMin=m;
+    for(const ev of events) if(m>=ev.t) ev.done=true;
+    lastHour=Math.floor(m/60);
+  },
   get min(){return gameMin;},
   get threat(){return threat;},
   get integrity(){return integrity;},
+  get power(){return power;},
+  set power(v){power=v;},
+  get entityPos(){return entityPos;},
+  set entityPos(v){entityPos=v; if(v===2){doorT=0;doorWindow=8;} else doorT=-1;},
+  get doorT(){return doorT;},
+  get tuneOn(){return tuneOn;},
+  get lock(){return lock;},
+  get needle(){return needle;},
+  get band(){return band;},
+  get anomalies(){return anomalies;},
+  spawn:()=>spawnAnomaly(),
+  get cause(){return deathCause;},
 };
 </script>
 </body>

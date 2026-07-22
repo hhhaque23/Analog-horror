@@ -32,24 +32,33 @@ flashing imagery.
 | Input | Action |
 |---|---|
 | `1`–`6` | Switch channel |
-| `SPACE` (hold) | Re-track a corrupted channel until the signal is restored |
+| `SPACE` | Engage/abort manual tracking on a corrupted channel |
+| `←` `→` (or `A`/`D`) | Steer the tracking needle into the sweet-spot band |
+| `F` | **SIGNAL FLOOD** — repels the thing in the hallways. Costs 10% power |
 | `E` | Answer the phone, if it rings — *or don't* |
 
-- Intrusions corrupt channels at random. Find them, tune in, hold SPACE — and
-  ride out the tracking slips.
-- **Surges** give you only seconds, but re-track almost instantly.
+- Intrusions corrupt channels at random. Tune in, hit SPACE, and **steer the
+  needle** into the moving band until LOCK hits 100% — while the thing in the
+  signal lunges at you and, late at night, inverts your controls.
+- **Surges** give you only ten seconds, but lock fast if you keep your nerve.
 - Some intrusions **watch back**. Those grow while you look at them; cut away
   and starve them.
-- Ignore a fuse too long and it becomes a **containment failure**. Three
-  failures and it reaches master control.
+- Miss a fuse and it's a **containment failure**. Three failures and it
+  reaches master control.
+- **It doesn't only live in the signal.** It crosses the parking lot (cam A),
+  then the hallway (cam B), then it is at your door. When the cameras go
+  empty, FLOOD — or it comes through.
+- **Power is finite.** Everything costs: tracking, flooding, even the phone.
+  Run dry before dawn and you'll hear footsteps in the dark.
 - The phone rings three times a night. Not every caller is staff — listen to
   the ring before you press E.
 - Channel 6 is dead static. The last operator is still on it. Stare long
   enough and the static names the next channel to fail… but the static also
   notices you.
 - The shift runs 12:00 AM → 6:00 AM (one game minute per real second — about a
-  six-minute night, escalating hard after 4 AM). You're graded S/A/B/C/D on
-  signal integrity at sign-on; your last grade is remembered.
+  six-minute night). It is meant to be hard: expect to die before your first
+  sunrise. Grades S–D on integrity + leftover power; death is an F. Your last
+  grade is remembered.
 
 ## Shipping to Steam
 
