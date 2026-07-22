@@ -1,13 +1,19 @@
 # DEAD AIR — an analog horror game
 
+*a MOSH Production Studio release*
+
 **WKRX-TV, Grayson County. 12:00 AM.** You are the overnight master-control
 operator. Six channels. One rule from the 1987 handbook: *the transmitter must
 never carry an uncorrected signal.* Something travels through broadcast
 infrastructure, and tonight it found your station.
 
-Everything — visuals, VHS distortion, static, the 60 Hz hum, the EAS attention
-tone, the stingers — is generated procedurally at runtime. No asset files, no
-dependencies, no build step. One HTML file.
+Everything — the animated MOSH studio ident, visuals, VHS distortion, static,
+the 60 Hz hum, the EAS attention tone, the whispers, the stingers — is
+generated procedurally at runtime. No asset files, no dependencies, no build
+step. One HTML file.
+
+> Contributing or continuing development with an AI assistant? Read
+> [`HANDOFF.md`](HANDOFF.md) first — it maps the whole codebase.
 
 ## Play it
 
@@ -27,14 +33,23 @@ flashing imagery.
 |---|---|
 | `1`–`6` | Switch channel |
 | `SPACE` (hold) | Re-track a corrupted channel until the signal is restored |
-| `E` | Answer the phone, if it rings |
+| `E` | Answer the phone, if it rings — *or don't* |
 
-- Intrusions corrupt channels at random. Find them, tune in, hold SPACE.
-- Ignore one too long and it becomes a **containment failure**. Three failures
-  and it reaches master control.
+- Intrusions corrupt channels at random. Find them, tune in, hold SPACE — and
+  ride out the tracking slips.
+- **Surges** give you only seconds, but re-track almost instantly.
+- Some intrusions **watch back**. Those grow while you look at them; cut away
+  and starve them.
+- Ignore a fuse too long and it becomes a **containment failure**. Three
+  failures and it reaches master control.
+- The phone rings three times a night. Not every caller is staff — listen to
+  the ring before you press E.
+- Channel 6 is dead static. The last operator is still on it. Stare long
+  enough and the static names the next channel to fail… but the static also
+  notices you.
 - The shift runs 12:00 AM → 6:00 AM (one game minute per real second — about a
-  six-minute night, escalating hard after 4 AM).
-- Channel 6 is dead static. The last operator is still on it.
+  six-minute night, escalating hard after 4 AM). You're graded S/A/B/C/D on
+  signal integrity at sign-on; your last grade is remembered.
 
 ## Shipping to Steam
 

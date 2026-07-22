@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DEAD AIR — WKRX-TV</title>
+<title>DEAD AIR — a MOSH Production</title>
 <style>
   :root{
     --phosphor:#c8ffc8;
@@ -112,7 +112,7 @@
 <script>
 "use strict";
 /* ============================================================
-   DEAD AIR — an analog horror game
+   DEAD AIR — an analog horror game — a MOSH production
    You are the overnight master-control operator at WKRX-TV.
    Keep the signal clean until sunrise. Something is inside it.
    ============================================================ */
@@ -130,11 +130,13 @@ const flickerEl = document.getElementById("flicker");
 const rnd = (a=1,b) => b===undefined ? Math.random()*a : a+Math.random()*(b-a);
 const ri = (a,b) => Math.floor(rnd(a,b+1));
 const clamp = (v,a,b) => v<a?a:v>b?b:v;
+const lerp = (a,b,t) => a+(b-a)*t;
 const pick = arr => arr[Math.floor(Math.random()*arr.length)];
 
 /* ---------- audio (all procedural, WebAudio) ---------- */
 let AC=null, master=null, humOsc=null, humGain=null;
 let staticSrc=null, staticGain=null, droneOsc=null, droneGain=null;
+let whisperGain=null;
 function initAudio(){
   if(AC) return;
   AC = new (window.AudioContext||window.webkitAudioContext)();
@@ -166,9 +168,21 @@ function initAudio(){
   droneGain = AC.createGain(); droneGain.gain.value=0.0;
   droneOsc.connect(dflt).connect(droneGain).connect(master);
   droneOsc.start();
+
+  // whisper bed: narrow band-passed noise with a wandering formant —
+  // sounds like unintelligible speech just under the static
+  const wsrc = AC.createBufferSource(); wsrc.buffer=buf; wsrc.loop=true;
+  const wbp = AC.createBiquadFilter(); wbp.type="bandpass"; wbp.frequency.value=850; wbp.Q.value=9;
+  const wlfo = AC.createOscillator(); wlfo.type="sine"; wlfo.frequency.value=2.3;
+  const wlg = AC.createGain(); wlg.gain.value=420;
+  wlfo.connect(wlg).connect(wbp.frequency);
+  whisperGain = AC.createGain(); whisperGain.gain.value=0;
+  wsrc.connect(wbp).connect(whisperGain).connect(master);
+  wsrc.start(); wlfo.start();
 }
 function setStaticLevel(v){ if(staticGain) staticGain.gain.setTargetAtTime(v, AC.currentTime, .08); }
 function setDroneLevel(v){ if(droneGain) droneGain.gain.setTargetAtTime(v, AC.currentTime, .3); }
+function setWhisperLevel(v){ if(whisperGain) whisperGain.gain.setTargetAtTime(v, AC.currentTime, .4); }
 function beep(freq=1000,dur=.12,vol=.15,type="square"){
   if(!AC) return;
   const o=AC.createOscillator(),g=AC.createGain();
@@ -191,6 +205,47 @@ function stinger(){ // discordant hit for scares
   const g=AC.createGain();g.gain.setValueAtTime(.5,AC.currentTime);
   g.gain.exponentialRampToValueAtTime(.0001,AC.currentTime+1.2);
   n.connect(g).connect(master);n.start();n.stop(AC.currentTime+1.2);
+}
+function scream(){ // layered shriek for the death scare
+  if(!AC) return;
+  const t=AC.currentTime;
+  const n=AC.createBufferSource(); n.buffer=staticSrc.buffer;
+  const hp=AC.createBiquadFilter(); hp.type="highpass"; hp.frequency.value=1200;
+  const g=AC.createGain(); g.gain.setValueAtTime(.4,t);
+  g.gain.exponentialRampToValueAtTime(.0001,t+1.6);
+  n.connect(hp).connect(g).connect(master); n.start(); n.stop(t+1.6);
+  for(const f of [720,745]){
+    const o=AC.createOscillator(),og=AC.createGain();
+    o.type="sawtooth";
+    o.frequency.setValueAtTime(f,t);
+    o.frequency.linearRampToValueAtTime(f*2.1,t+.5);
+    o.frequency.linearRampToValueAtTime(f*.8,t+1.4);
+    og.gain.setValueAtTime(.12,t);
+    og.gain.exponentialRampToValueAtTime(.0001,t+1.5);
+    o.connect(og).connect(master);o.start();o.stop(t+1.5);
+  }
+}
+function screech(){ // tracking slip
+  if(!AC) return;
+  const o=AC.createOscillator(),g=AC.createGain();
+  o.type="sawtooth";
+  o.frequency.setValueAtTime(2400,AC.currentTime);
+  o.frequency.exponentialRampToValueAtTime(900,AC.currentTime+.15);
+  g.gain.setValueAtTime(.06,AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(.0001,AC.currentTime+.16);
+  o.connect(g).connect(master);o.start();o.stop(AC.currentTime+.17);
+}
+function thump(){ // one heartbeat (lub-dub)
+  if(!AC) return;
+  for(const [off,v] of [[0,.16],[0.16,.10]]){
+    const o=AC.createOscillator(),g=AC.createGain(),f=AC.createBiquadFilter();
+    o.type="sine"; o.frequency.setValueAtTime(58,AC.currentTime+off);
+    f.type="lowpass"; f.frequency.value=120;
+    g.gain.setValueAtTime(v,AC.currentTime+off);
+    g.gain.exponentialRampToValueAtTime(.0001,AC.currentTime+off+.14);
+    o.connect(f).connect(g).connect(master);
+    o.start(AC.currentTime+off); o.stop(AC.currentTime+off+.15);
+  }
 }
 function easTone(on){
   if(!AC) return;
@@ -220,22 +275,117 @@ function phoneRingTone(){
     o.connect(g).connect(master);o.start(t);o.stop(t+1);
   }
 }
+function evilRingTone(){ // too slow, too low — the tell
+  if(!AC) return;
+  const t=AC.currentTime;
+  for(const f of [180,187]){
+    const o=AC.createOscillator(),g=AC.createGain();
+    o.type="square";o.frequency.value=f;
+    g.gain.setValueAtTime(0,t);
+    for(let k=0;k<6;k++){
+      g.gain.setValueAtTime(.07,t+k*.17);
+      g.gain.setValueAtTime(0,t+k*.17+.1);
+    }
+    o.connect(g).connect(master);o.start(t);o.stop(t+1.1);
+  }
+}
+function silenceScare(){
+  if(!AC) return;
+  say("the hum just… stopped.",1.5);
+  const t=AC.currentTime;
+  master.gain.cancelScheduledValues(t);
+  master.gain.setTargetAtTime(.0001,t,.08);
+  setTimeout(()=>{
+    if(!AC) return;
+    master.gain.setTargetAtTime(.7,AC.currentTime,.02);
+    stinger(); noiseBurst=1; shake=1;
+    flickerEl.style.opacity=.85;
+    setTimeout(()=>flickerEl.style.opacity=0,80);
+    if(state===ST.PLAY) say("—it was RIGHT THERE—",2.5);
+  },1700);
+}
+
+/* ---------- MOSH studio intro audio ---------- */
+let studioNodes=[];
+function studioAudio(){
+  if(!AC) return;
+  const T=AC.currentTime;
+  const keep=n=>{studioNodes.push(n);return n;};
+  // tape hiss ramp
+  const hiss=keep(AC.createBufferSource()); hiss.buffer=staticSrc.buffer; hiss.loop=true;
+  const hg=AC.createGain();
+  hg.gain.setValueAtTime(0,T);
+  hg.gain.linearRampToValueAtTime(.05,T+.4);
+  hg.gain.linearRampToValueAtTime(.012,T+1.6);
+  hg.gain.linearRampToValueAtTime(0,T+9.4);
+  hiss.connect(hg).connect(master); hiss.start(T); hiss.stop(T+9.6);
+  // sub boom on each letter landing
+  for(const lt of LAND){
+    const o=keep(AC.createOscillator()),g=AC.createGain();
+    o.type="sine";
+    o.frequency.setValueAtTime(130,T+lt);
+    o.frequency.exponentialRampToValueAtTime(36,T+lt+.5);
+    g.gain.setValueAtTime(.0001,T);
+    g.gain.setValueAtTime(.5,T+lt);
+    g.gain.exponentialRampToValueAtTime(.0001,T+lt+.7);
+    o.connect(g).connect(master); o.start(T+lt); o.stop(T+lt+.8);
+  }
+  // rising fanfare — detuned saw chord swelling under the logo build
+  const chord=[110,164.8,220,277.2];
+  chord.forEach((f,i)=>{
+    const o=keep(AC.createOscillator()),g=AC.createGain();
+    o.type="sawtooth";
+    o.frequency.setValueAtTime(f*.5,T+1.6);
+    o.frequency.exponentialRampToValueAtTime(f,T+3.9);
+    o.detune.setValueAtTime(i*4,T);
+    o.detune.setValueAtTime(i*4,T+7.2);
+    o.detune.linearRampToValueAtTime(i*4-1600,T+9.0); // corruption pitch-fall
+    g.gain.setValueAtTime(0,T+1.6);
+    g.gain.linearRampToValueAtTime(.045,T+4.6);
+    g.gain.setValueAtTime(.045,T+7.2);
+    g.gain.exponentialRampToValueAtTime(.0001,T+9.0);
+    o.connect(g).connect(master); o.start(T+1.6); o.stop(T+9.2);
+  });
+  // choir-ish ident pad
+  for(const f of [440,554.4,659.3,880]){
+    const o=keep(AC.createOscillator()),g=AC.createGain();
+    o.type="sine"; o.frequency.setValueAtTime(f,T+5);
+    o.detune.setValueAtTime(0,T+7.2);
+    o.detune.linearRampToValueAtTime(-1600,T+9.0);
+    g.gain.setValueAtTime(0,T+5);
+    g.gain.linearRampToValueAtTime(.02,T+5.6);
+    g.gain.setValueAtTime(.02,T+7.4);
+    g.gain.exponentialRampToValueAtTime(.0001,T+8.8);
+    o.connect(g).connect(master); o.start(T+5); o.stop(T+9.2);
+  }
+}
+function stopStudioAudio(){
+  for(const n of studioNodes){ try{n.stop();}catch(e){} }
+  studioNodes=[];
+}
 
 /* ---------- game state ---------- */
-const ST = { MENU:0, INTRO:1, PLAY:2, EAS:3, PHONE:4, SCARE:5, DEAD:6, WIN:7 };
-let state = ST.MENU;
+const ST = { BOOT:0, STUDIO:1, MENU:2, INTRO:3, PLAY:4, EAS:5, SCARE:6, DEAD:7, WIN:8 };
+let state = ST.BOOT;
 let stateT = 0;             // seconds in current state
 let gameMin = 0;            // minutes since 12:00 AM (1 real sec = 1 game min)
 const NIGHT_END = 360;      // 6:00 AM
 let channel = 1;
-let anomalies = {};         // ch -> {age}
+let anomalies = {};         // ch -> {age,kind,resp,fuse,trackTime,warned}
 let strikes = 0;
 let tracking = false;
-let trackProgress = 0;
+let trackProgress = 0, slipT = 0;
 let threat = 0;             // 0..1, drives dread + entity closeness
+let dread = 0;              // extra threat from bad choices, decays
+let ch6Heat = 0, ch6WatchT = 0, ch6Total = 0;
 let scareT = 0, deadT = 0, winT = 0;
-let easDone=false, phoneDone=false, buttonsCorrupt=false, blackoutDone=false;
-let phoneRingT = -1;
+let buttonsCorrupt=false;
+let events = [];            // scripted night beats
+let lastHour = 0;
+let activeCall = -1, phoneRingT = -1;
+let integrity = 100, restoredCount = 0, finalGrade = "";
+let heartIn = 0, sublimT = 0;
+let nextAnomalyIn = 8, nextTarget = 1;
 let sub = "", subT = 0;
 let noiseBurst = 0;         // visual disruption impulse
 let shake = 0;
@@ -243,21 +393,37 @@ let logLines = [];
 
 function say(text, dur=4){ sub=text; subT=dur; }
 function addLog(s){ logLines.push(s); if(logLines.length>4) logLines.shift(); }
+function loadLastGrade(){ try{ return localStorage.getItem("deadair_last"); }catch(e){ return null; } }
+function finishGrade(alive){
+  const g = !alive ? "F"
+    : integrity>=92 ? "S" : integrity>=80 ? "A" : integrity>=65 ? "B"
+    : integrity>=45 ? "C" : "D";
+  try{ localStorage.setItem("deadair_last",g); }catch(e){}
+  return g;
+}
 
 /* ---------- input ---------- */
 const keys = {};
+function advance(){ // shared key/click state dispatch
+  if(state===ST.BOOT){ beginStudio(); return true; }
+  if(state===ST.STUDIO){ if(stateT>1.5) endStudio(); return true; }
+  if(state===ST.MENU){ startIntro(); return true; }
+  if(state===ST.INTRO && stateT>1.5){ startNight(); return true; }
+  if(state===ST.DEAD && deadT>4){ resetToMenu(); return true; }
+  if(state===ST.WIN && winT>6){ resetToMenu(); return true; }
+  return false;
+}
 window.addEventListener("keydown", e=>{
   if(e.repeat) return;
   keys[e.code]=true;
-  if(state===ST.MENU){ startIntro(); return; }
-  if(state===ST.INTRO && stateT>2){ startNight(); return; }
-  if(state===ST.DEAD && deadT>4){ resetToMenu(); return; }
-  if(state===ST.WIN && winT>6){ resetToMenu(); return; }
-  if(state===ST.PLAY||state===ST.EAS||state===ST.PHONE){
+  initAudio();
+  if(AC.state==="suspended") AC.resume();
+  if(advance()) return;
+  if(state===ST.PLAY||state===ST.EAS){
     const n = parseInt(e.key,10);
     if(n>=1&&n<=6&&state===ST.PLAY){ switchChannel(n); }
     if(e.code==="Space"){ tracking=true; }
-    if(e.code==="KeyE" && state===ST.PHONE && phoneRingT>=0){ answerPhone(); }
+    if(e.code==="KeyE" && state===ST.PLAY && phoneRingT>=0){ answerPhone(); }
   }
 });
 window.addEventListener("keyup", e=>{
@@ -267,15 +433,13 @@ window.addEventListener("keyup", e=>{
 window.addEventListener("pointerdown", ()=>{
   initAudio();
   if(AC.state==="suspended") AC.resume();
-  if(state===ST.MENU) startIntro();
-  else if(state===ST.INTRO && stateT>2) startNight();
-  else if(state===ST.DEAD && deadT>4) resetToMenu();
-  else if(state===ST.WIN && winT>6) resetToMenu();
+  advance();
 });
 
 function switchChannel(n){
   if(n===channel) return;
   channel=n;
+  ch6WatchT=0;
   noiseBurst=Math.max(noiseBurst,.9);
   beep(1200,.05,.08);
   setStaticLevel(.16);
@@ -283,62 +447,153 @@ function switchChannel(n){
 }
 
 /* ---------- flow ---------- */
-function startIntro(){ initAudio(); state=ST.INTRO; stateT=0; }
+function beginStudio(){ state=ST.STUDIO; stateT=0; studioAudio(); }
+function endStudio(){ stopStudioAudio(); state=ST.MENU; stateT=0; noiseBurst=1; }
+function startIntro(){ state=ST.INTRO; stateT=0; }
 function startNight(){
   state=ST.PLAY; stateT=0; gameMin=0; channel=1;
-  anomalies={}; strikes=0; threat=0; tracking=false; trackProgress=0;
-  easDone=phoneDone=buttonsCorrupt=blackoutDone=false;
-  phoneRingT=-1; logLines=[];
+  anomalies={}; strikes=0; threat=0; dread=0; tracking=false; trackProgress=0; slipT=0;
+  ch6Heat=0; ch6WatchT=0; ch6Total=0;
+  buttonsCorrupt=false; lastHour=0;
+  activeCall=-1; phoneRingT=-1; logLines=[];
+  integrity=100; restoredCount=0; finalGrade="";
+  heartIn=0; sublimT=0;
+  nextAnomalyIn=8; nextTarget=ri(1,5);
+  buildEvents();
   say("Shift start. Keep every channel clean until 6 AM.",5);
   addLog("00:00 SHIFT START — OP #7 ON DUTY");
   updateStaticBed();
 }
-function resetToMenu(){ state=ST.MENU; stateT=0; easTone(false); setStaticLevel(0); setDroneLevel(0); }
+function resetToMenu(){
+  state=ST.MENU; stateT=0;
+  easTone(false); setStaticLevel(0); setDroneLevel(0); setWhisperLevel(0);
+}
 function updateStaticBed(){
   const base = channel===6 ? .10 : .02;
   setStaticLevel(base + threat*.05 + (anomalies[channel]?.03:0));
 }
 
 /* ---------- anomaly system ---------- */
-let nextAnomalyIn = 18;
+function scheduleNext(hour){
+  const interval = clamp(16-hour*2.2, 5, 16);
+  nextAnomalyIn = interval*rnd(.75,1.25);
+  nextTarget = ri(1,5); // pre-chosen so channel 6 can whisper it to you
+}
 function spawnAnomaly(){
   const candidates=[1,2,3,4,5].filter(c=>!anomalies[c]);
   if(!candidates.length) return;
-  const ch=pick(candidates);
-  anomalies[ch]={age:0, kind:pick(["figure","face","text","invert"])};
-  beep(300,.3,.05,"sine");
-  addLog(fmtClock()+" ANOMALY CH-"+ch);
+  const ch = candidates.includes(nextTarget) ? nextTarget : pick(candidates);
+  const hour = gameMin/60;
+  let resp="track", kind=pick(["figure","face","text","invert"]);
+  let fuse=32, trackTime=2.4, age=0;
+  const roll=Math.random();
+  if(hour>0.8 && roll<0.22){ resp="stare"; kind="stare"; fuse=26; age=7; }
+  else if(hour>1.6 && roll<0.40){ kind="surge"; fuse=10; trackTime=1.1; }
+  anomalies[ch]={age,kind,resp,fuse,trackTime,warned:false};
+  if(resp==="stare"){
+    beep(160,.5,.06,"sine");
+    say("something is watching from CH "+ch+". do not meet its eye.",4);
+    addLog(fmtClock()+" OBSERVER CH-"+ch);
+  } else if(kind==="surge"){
+    beep(880,.15,.1,"sawtooth"); beep(880,.15,.1,"sawtooth");
+    say("SURGE ON CH "+ch+" — SECONDS TO ACT.",3);
+    addLog(fmtClock()+" SURGE CH-"+ch);
+  } else {
+    beep(300,.3,.05,"sine");
+    addLog(fmtClock()+" ANOMALY CH-"+ch);
+  }
+}
+function failAnomaly(ch){
+  delete anomalies[ch];
+  strikes++;
+  integrity=clamp(integrity-12,0,100);
+  noiseBurst=1; shake=1;
+  stinger();
+  addLog(fmtClock()+" CONTAINMENT FAILURE ("+strikes+"/3)");
+  say(strikes<3 ? "IT MOVED CLOSER." : "", 3);
+  if(strikes>=3){ triggerScare(); return true; }
+  return false;
 }
 function anomalyTick(dt){
   const hour = gameMin/60;
   nextAnomalyIn -= dt;
-  const interval = clamp(20-hour*2.6, 7, 20);
-  if(nextAnomalyIn<=0){ spawnAnomaly(); nextAnomalyIn = interval*rnd(.75,1.25); }
+  if(nextAnomalyIn<=0){ spawnAnomaly(); scheduleNext(hour); }
 
   for(const chS of Object.keys(anomalies)){
     const ch=+chS, a=anomalies[ch];
-    a.age += dt;
-    if(a.age>26 && a.age-dt<=26){ say("SIGNAL DEGRADATION CRITICAL — CH "+ch,3); beep(220,.5,.1,"sawtooth"); }
-    if(a.age>38){
-      delete anomalies[ch];
-      strikes++;
-      noiseBurst=1; shake=1;
-      stinger();
-      addLog(fmtClock()+" CONTAINMENT FAILURE ("+strikes+"/3)");
-      say(strikes<3 ? "IT MOVED CLOSER." : "", 3);
-      if(strikes>=3){ triggerScare(); return; }
+    if(a.resp==="stare"){
+      // it feeds on attention: grows while watched, starves while ignored
+      if(channel===ch) a.age += dt*2.6;
+      else a.age -= dt*.85;
+      if(a.age<=0){
+        delete anomalies[ch];
+        integrity=clamp(integrity+1,0,100);
+        addLog(fmtClock()+" CH-"+ch+" SETTLED");
+        say("it lost interest in channel "+ch+".",2.5);
+        updateStaticBed();
+        continue;
+      }
+    } else {
+      a.age += dt;
     }
+    if(!a.warned && a.age > a.fuse*.68){
+      a.warned=true;
+      say(a.kind==="surge" ? "SURGE CRITICAL — CH "+ch : "SIGNAL DEGRADATION CRITICAL — CH "+ch, 3);
+      beep(220,.5,.1,"sawtooth");
+    }
+    if(a.age>a.fuse){ if(failAnomaly(ch)) return; }
   }
-  threat = clamp(hour/6*.5 + strikes*.18 + Object.keys(anomalies).length*.06, 0, 1);
-  setDroneLevel(threat*.10);
 
-  // tracking clears the anomaly on the current channel
-  if(tracking && anomalies[channel] && state===ST.PLAY){
-    trackProgress += dt/2.6;
+  const anomCount=Object.keys(anomalies).length;
+  integrity = clamp(integrity - dt*.12*anomCount, 0, 100);
+  dread = Math.max(0, dread - dt*.004);
+  ch6Heat = Math.max(0, ch6Heat - dt*.004);
+  threat = clamp(hour/6*.42 + strikes*.18 + anomCount*.06 + ch6Heat + dread, 0, 1);
+  setDroneLevel(threat*.10);
+  if(humGain) humGain.gain.setTargetAtTime(.012+threat*.02, AC.currentTime, 1);
+
+  // heartbeat under high threat
+  if(threat>.55){
+    heartIn -= dt;
+    if(heartIn<=0){ thump(); heartIn = lerp(1.1,.55, clamp((threat-.55)/.45,0,1)); }
+  }
+
+  // subliminal single-frame flashes when it's close
+  if(threat>.5 && sublimT<=0 && Math.random()<dt*.012){
+    sublimT=.08;
+    flickerEl.style.opacity=.5;
+    setTimeout(()=>flickerEl.style.opacity=0,60);
+  }
+
+  // channel 6: whisper bed, rising heat, and the intel trade
+  if(channel===6){
+    ch6WatchT += dt; ch6Total += dt;
+    ch6Heat = Math.min(.2, ch6Heat + dt*.012);
+    setWhisperLevel(clamp(ch6WatchT/5,0,1)*.14);
+  } else {
+    ch6WatchT=0;
+    setWhisperLevel(threat>.8 ? .03 : 0);
+  }
+
+  // tracking clears trackable anomalies on the current channel
+  const a=anomalies[channel];
+  const trackable = a && a.resp==="track";
+  if(tracking && trackable && state===ST.PLAY){
     setStaticLevel(.2);
+    if(slipT>0){
+      slipT -= dt;
+      trackProgress = Math.max(0, trackProgress - dt*.9);
+    } else {
+      trackProgress += dt/a.trackTime;
+      if(a.kind!=="surge" && Math.random()<dt*.45){
+        slipT=.35; screech(); noiseBurst=Math.max(noiseBurst,.5);
+      }
+    }
     if(trackProgress>=1){
       delete anomalies[channel];
-      trackProgress=0; noiseBurst=.8;
+      trackProgress=0; slipT=0; noiseBurst=.8;
+      restoredCount++;
+      integrity=clamp(integrity+2,0,100);
       beep(1600,.1,.1); beep(2100,.12,.1);
       addLog(fmtClock()+" CH-"+channel+" RESTORED");
       say("Signal restored.",2);
@@ -351,37 +606,109 @@ function anomalyTick(dt){
 }
 
 /* ---------- scripted events ---------- */
-function scriptTick(){
-  if(gameMin>=60 && !easDone){ easDone=true; state=ST.EAS; stateT=0; easTone(true); }
-  if(gameMin>=150 && !phoneDone){ phoneDone=true; state=ST.PHONE; stateT=0; phoneRingT=0; }
-  if(gameMin>=185 && !buttonsCorrupt){ buttonsCorrupt=true; if(channel===5) say("…did Mr. Buttons just look at you?",4); }
-  if(gameMin>=250 && !blackoutDone){
-    blackoutDone=true; noiseBurst=1; shake=.6; stinger();
-    say("ALL FEEDS DROPPED — 4:10 AM", 4);
-    for(const c of [1,2,3]) if(!anomalies[c]) anomalies[c]={age:0,kind:"figure"};
-    addLog("04:10 MULTIPLE INTRUSIONS");
-  }
-  if(gameMin>=NIGHT_END){ state=ST.WIN; winT=0; easTone(false); setDroneLevel(0); setStaticLevel(.02); }
-}
-function answerPhone(){
-  phoneRingT=-1;
-  state=ST.PLAY;
-  const lines=[
+const HOURLINES = {
+  1:"1 AM. five hours left. the building settles.",
+  2:"2 AM. the fog is against the glass.",
+  3:"3 AM. the dead hour. it is strongest now.",
+  4:"4 AM. you heard your name in the static.",
+  5:"5 AM. almost. do not relax.",
+};
+const CALLS = [
+  { evil:false, lines:[
+    "“Night desk? Marla, from the tower site.”",
+    "“Route 9 fog took the north relay. You're alone on the board.”",
+    "“…lock the transmitter room. Don't ask me why.”"]},
+  { evil:false, lines:[
     "“You shouldn't be there tonight.”",
     "“It learned the schedule. It knows when you blink.”",
-    "“The last operator is still on channel six.”",
+    "“The last operator is still on channel six.”"]},
+  { evil:true, lines:[
+    "“ope̸rator. open the transmitter room.”",
+    "“i am so c̷o̶l̵d in here. let me into the booth.”",
+    "“I KNOW YOUR SHIFT ENDS AT SIX.”"]},
+];
+function buildEvents(){
+  events=[
+    {t:45, fn:()=>{
+      if(humOsc) humOsc.frequency.setTargetAtTime(63,AC.currentTime,1);
+      say("the mains hum shifted pitch. that's new.",4);
+      addLog("00:45 HUM +3Hz");
+    }},
+    {t:60, fn:()=>{ state=ST.EAS; stateT=0; easTone(true); }},
+    {t:95, fn:()=>startCall(0)},
+    {t:150, fn:()=>startCall(1)},
+    {t:185, fn:()=>{
+      buttonsCorrupt=true;
+      if(channel===5) say("…did Mr. Buttons just look at you?",4);
+    }},
+    {t:215, fn:()=>startCall(2)},
+    {t:250, fn:()=>{
+      noiseBurst=1; shake=.6; stinger();
+      say("ALL FEEDS DROPPED — 4:10 AM", 4);
+      for(const c of [1,2,3]) if(!anomalies[c])
+        anomalies[c]={age:0,kind:pick(["figure","surge"]),resp:"track",fuse:c===1?10:32,trackTime:c===1?1.1:2.4,warned:false};
+      addLog("04:10 MULTIPLE INTRUSIONS");
+    }},
+    {t:290, fn:silenceScare},
+    {t:330, fn:()=>{ dread+=.1; say("the sun is a rumor. hold the line.",4); }},
   ];
+}
+function scriptTick(){
+  for(const ev of events){
+    if(!ev.done && gameMin>=ev.t){ ev.done=true; ev.fn(); }
+  }
+  const h=Math.floor(gameMin/60);
+  if(h>lastHour && h>=1 && h<=5){
+    lastHour=h;
+    beep(520,.2,.05,"triangle"); beep(660,.25,.04,"triangle");
+    say(HOURLINES[h],4);
+  }
+  if(gameMin>=NIGHT_END){
+    finalGrade=finishGrade(true);
+    state=ST.WIN; winT=0;
+    easTone(false); setDroneLevel(0); setWhisperLevel(0); setStaticLevel(.02);
+  }
+}
+function startCall(i){
+  activeCall=i; phoneRingT=0;
+  addLog(fmtClock()+" LINE 1 RINGING");
+}
+function missCall(){
+  const c=CALLS[activeCall];
+  phoneRingT=-1; activeCall=-1;
+  if(c.evil){
+    integrity=clamp(integrity+4,0,100);
+    say("the ringing stops. something exhales on the line.",4);
+    addLog(fmtClock()+" CALL REFUSED — GOOD");
+  } else {
+    say("the ringing stopped by itself.",3);
+    addLog(fmtClock()+" CALL ABANDONED");
+  }
+}
+function answerPhone(){
+  const c=CALLS[activeCall];
+  phoneRingT=-1; activeCall=-1;
+  if(c.evil){
+    stinger(); shake=1; dread+=.22;
+    integrity=clamp(integrity-8,0,100);
+    spawnAnomaly(); spawnAnomaly();
+    addLog(fmtClock()+" YOU LET IT SPEAK");
+  } else {
+    addLog(fmtClock()+" INBOUND CALL — LINE 1");
+  }
   let i=0;
-  say(lines[0],4); beep(90,.8,.06,"sine");
+  say(c.lines[0],4); beep(90,.8,.06,"sine");
   const iv=setInterval(()=>{
     i++;
-    if(i<lines.length && state===ST.PLAY){ say(lines[i],4); beep(90,.8,.06,"sine"); }
+    if(i<c.lines.length && state===ST.PLAY){ say(c.lines[i],4); beep(90,.8,.06,"sine"); }
     else clearInterval(iv);
   },4500);
-  addLog(fmtClock()+" INBOUND CALL — LINE 1");
 }
 function triggerScare(){
-  state=ST.SCARE; scareT=0; stinger(); setStaticLevel(.5); setDroneLevel(.3);
+  finalGrade=finishGrade(false);
+  state=ST.SCARE; scareT=0;
+  stinger(); scream();
+  setStaticLevel(.5); setDroneLevel(.3); setWhisperLevel(0);
   flickerEl.style.opacity=.9;
   setTimeout(()=>flickerEl.style.opacity=0,90);
 }
@@ -412,6 +739,13 @@ function fmtClock(){
   const disp=(h===0?12:h);
   return (disp+":"+mm+" AM");
 }
+function corruptStr(s){
+  if(threat<.7) return s;
+  const p=(threat-.7)*.25;
+  let out="";
+  for(const c of s) out += (c!=="\n" && Math.random()<p) ? pick(["█","▓","▒","?","§","Ø"]) : c;
+  return out;
+}
 function trackingLines(strength){
   // horizontal VHS tracking tear bands
   const n = 1+Math.floor(strength*4);
@@ -423,25 +757,89 @@ function trackingLines(strength){
     cx.fillRect(0,y,W,1);
   }
 }
-function drawFigure(x, y, scale, dark=.92){
-  // wobbling humanoid silhouette
+
+/* ---------- the monsters ---------- */
+function drawFigure(x, y, scale, dark=.92, facing=1){
+  // the Tall One: unnaturally still, then it twitches sideways.
+  const now=performance.now();
+  const q=Math.floor(now/430);
+  const h1=Math.abs(Math.sin(q*127.3)*43758.5)%1;
+  const tw = h1<.14 ? (h1*140-10) : 0;
+  const breathe=1+Math.sin(now/1700)*.015;
+  const tilt=(.14+threat*.4)*(x<W/2?1:-1);
   cx.save();
-  cx.translate(x,y); cx.scale(scale,scale);
+  cx.translate(x+tw,y); cx.scale(scale*breathe,scale);
   cx.fillStyle="rgba(3,3,3,"+dark+")";
-  const w=t=>Math.sin(performance.now()/90+t)*2.2;
+  cx.strokeStyle="rgba(3,3,3,"+dark+")";
+  // emaciated torso and stilt legs
   cx.beginPath();
-  cx.ellipse(0+w(0),-88,13,17,0,0,7);            // head
-  cx.fill();
-  cx.beginPath();
-  cx.moveTo(-16+w(1),-72); cx.lineTo(16+w(2),-72);
-  cx.lineTo(22+w(3),20); cx.lineTo(10,150); cx.lineTo(4,150);
-  cx.lineTo(0+w(4),30); cx.lineTo(-4,150); cx.lineTo(-10,150);
-  cx.lineTo(-22+w(5),20); cx.closePath(); cx.fill();
-  // too-long arms
-  cx.strokeStyle="rgba(3,3,3,"+dark+")"; cx.lineWidth=7; cx.lineCap="round";
-  cx.beginPath(); cx.moveTo(-18,-60); cx.quadraticCurveTo(-34+w(6)*3,10,-30,95); cx.stroke();
-  cx.beginPath(); cx.moveTo(18,-60); cx.quadraticCurveTo(34+w(7)*3,10,30,95); cx.stroke();
+  cx.moveTo(-11,-78); cx.lineTo(11,-78);
+  cx.lineTo(15,10); cx.lineTo(7,160); cx.lineTo(3,160);
+  cx.lineTo(0,26); cx.lineTo(-3,160); cx.lineTo(-7,160);
+  cx.lineTo(-15,10); cx.closePath(); cx.fill();
+  // head, tilted at a wrong angle that worsens with threat
+  cx.save();
+  cx.translate(0,-92); cx.rotate(tilt);
+  cx.beginPath(); cx.ellipse(0,-8,11,17,0,0,7); cx.fill();
+  if(facing>0){
+    // pinprick eyes tracking toward the center of your screen
+    const look=clamp((W/2-x)/W,-1,1)*4;
+    const blink=Math.sin(now/1400+x*.13)>.93;
+    if(!blink){
+      cx.fillStyle="rgba(220,235,215,"+(.75*facing)+")";
+      cx.fillRect(-5+look,-12,2.6,2.6);
+      cx.fillRect(3+look,-12,2.6,2.6);
+      cx.fillStyle="rgba(3,3,3,"+dark+")";
+    }
+  }
   cx.restore();
+  // arms far too long, ending in splayed fingers
+  cx.lineWidth=4.6; cx.lineCap="round";
+  for(const s of [-1,1]){
+    cx.beginPath(); cx.moveTo(s*13,-64);
+    cx.quadraticCurveTo(s*26,20,s*22,118); cx.stroke();
+    cx.lineWidth=1.6;
+    for(let f=0;f<5;f++){
+      cx.beginPath(); cx.moveTo(s*22,118);
+      cx.lineTo(s*22+(f-2)*3.4, 134+Math.sin(now/800+f)*2); cx.stroke();
+    }
+    cx.lineWidth=4.6;
+  }
+  cx.restore();
+}
+function drawCrawler(x, y, scale=1){
+  // knees-above-body thing moving in stop-motion steps
+  const step=Math.floor(performance.now()/130);
+  const s2=n=>{const v=Math.sin(step*127.1+n*311.7)*43758.5; return v-Math.floor(v);};
+  cx.save();
+  cx.translate(x, y+(s2(9)*4-2)); cx.scale(scale,scale);
+  cx.fillStyle="rgba(5,5,5,.9)"; cx.strokeStyle="rgba(5,5,5,.9)";
+  cx.beginPath(); cx.ellipse(0,-26,34,14,(s2(1)-.5)*.3,0,7); cx.fill();
+  cx.beginPath(); cx.ellipse(26,-10,10,12,0,0,7); cx.fill(); // head hangs low
+  cx.lineWidth=4; cx.lineCap="round";
+  for(let i=0;i<4;i++){
+    const bx=-24+i*16;
+    const kneeY=-58-s2(i)*14;
+    const footX=bx+(s2(i+4)-.5)*30;
+    cx.beginPath();
+    cx.moveTo(bx,-30);
+    cx.lineTo(bx+(s2(i+2)-.5)*18, kneeY);
+    cx.lineTo(footX,0);
+    cx.stroke();
+  }
+  cx.restore();
+}
+function drawWatcher(x, y, n, sev){
+  // pairs of eyes opening in the dark
+  const now=performance.now();
+  for(let i=0;i<n;i++){
+    const ox=Math.sin(i*73.7)*60*(1+i*.2), oy=Math.cos(i*39.2)*34;
+    if(Math.sin(now/1100+i*2.4)>.9) continue; // blink
+    const a=.25+sev*.6;
+    cx.fillStyle="rgba(230,240,220,"+a+")";
+    cx.fillRect(x+ox-5,y+oy,3,3);
+    cx.fillRect(x+ox+5,y+oy,3,3);
+  }
 }
 function drawScareFace(t){
   // procedurally distorted face, full screen
@@ -453,18 +851,40 @@ function drawScareFace(t){
   // skin
   cx.fillStyle="#d9cfc0";
   cx.beginPath(); cx.ellipse(0,0,150,205,0,0,7); cx.fill();
-  // hollow eyes — asymmetric, wrong
+  // veins crawling in from the edges
+  cx.strokeStyle="rgba(110,20,25,.55)"; cx.lineWidth=2;
+  for(let i=0;i<7;i++){
+    const a0=i*.9+.4;
+    cx.beginPath();
+    cx.moveTo(Math.cos(a0)*150, Math.sin(a0)*205);
+    cx.quadraticCurveTo(Math.cos(a0)*90+rnd(-20,20), Math.sin(a0)*120+rnd(-20,20),
+                        Math.cos(a0)*40, Math.sin(a0)*60);
+    cx.stroke();
+  }
+  // hollow sockets with rolling eye-whites inside
   cx.fillStyle="#050505";
   cx.beginPath(); cx.ellipse(-62+rnd(-4,4),-45,34,52+rnd(0,14),rnd(-.2,.2),0,7); cx.fill();
   cx.beginPath(); cx.ellipse(58+rnd(-4,4),-52,30,60+rnd(0,18),rnd(-.2,.2),0,7); cx.fill();
-  cx.fillStyle="#fff";
-  cx.fillRect(-68+rnd(-3,3),-52+rnd(-3,3),5,5);
-  cx.fillRect(54+rnd(-3,3),-60+rnd(-3,3),5,5);
-  // mouth stretched far too wide
+  const roll=performance.now()/140;
+  for(const [ex,ey] of [[-62,-45],[58,-52]]){
+    cx.fillStyle="#e8e4da";
+    cx.beginPath(); cx.arc(ex+Math.cos(roll)*10, ey+Math.sin(roll)*14, 11,0,7); cx.fill();
+    cx.fillStyle="#000";
+    cx.beginPath(); cx.arc(ex+Math.cos(roll)*13, ey+Math.sin(roll)*17, 3,0,7); cx.fill();
+  }
+  // mouth stretched far too wide, with too many rows of teeth
   cx.fillStyle="#0a0304";
-  cx.beginPath();
-  cx.ellipse(0,95,110+Math.sin(t*30)*18,55+t*30,0,0,7);
-  cx.fill();
+  const mw=110+Math.sin(t*30)*18, mh=55+t*30;
+  cx.beginPath(); cx.ellipse(0,95,mw,mh,0,0,7); cx.fill();
+  cx.fillStyle="#cfc4b2";
+  for(let row=0;row<2;row++){
+    const ry=95-mh+14+row*22, tn=9-row*2;
+    for(let i=-tn;i<=tn;i++){
+      cx.beginPath();
+      cx.moveTo(i*11-4,ry); cx.lineTo(i*11+4,ry); cx.lineTo(i*11,ry+12+rnd(0,4));
+      cx.closePath(); cx.fill();
+    }
+  }
   cx.strokeStyle="#c8b8a8"; cx.lineWidth=3;
   for(let i=-4;i<=4;i++){ cx.beginPath(); cx.moveTo(i*24,52); cx.lineTo(i*22,80+rnd(0,8)); cx.stroke(); }
   cx.restore();
@@ -473,8 +893,183 @@ function drawScareFace(t){
     const y=ri(0,H-8), hgt=ri(2,8);
     cx.putImageData(cx.getImageData(0,y,W,hgt), ri(-40,40), y);
   }
+  // vertical screen-melt as it comes through the glass
+  if(t>1){
+    const c=clamp(t-1,0,1);
+    for(let i=0;i<12;i++){
+      const sx=ri(0,W-12), w=ri(3,12);
+      cx.drawImage(cv, sx,0,w,H, sx,ri(2,10+24*c),w,H);
+    }
+  }
   if(Math.random()<.4) drawStatic(.25,4);
   text("HE IS IN THE SIGNAL", W/2, H-46, 26, "#f33", "center");
+}
+
+/* ---------- MOSH studio intro ---------- */
+const STUDIO_LEN=9.6;
+const MOSH="MOSH";
+const LAND=[1.9,2.55,3.2,3.85]; // letter landing times
+function chromeGrad(y0,y1,decay){
+  const g=cx.createLinearGradient(0,y0,0,y1);
+  if(decay<.5){
+    g.addColorStop(0,"#eaf6ff"); g.addColorStop(.35,"#8fc1e8");
+    g.addColorStop(.49,"#fdfdfd"); g.addColorStop(.52,"#1a2733");
+    g.addColorStop(.62,"#3e576d"); g.addColorStop(.8,"#cfe6f8");
+    g.addColorStop(1,"#f8fcff");
+  } else {
+    g.addColorStop(0,"#d8ffd8"); g.addColorStop(.4,"#57a06a");
+    g.addColorStop(.5,"#050d06"); g.addColorStop(.6,"#2e5c3a");
+    g.addColorStop(1,"#9fdca8");
+  }
+  return g;
+}
+function drawMoshLogo(t,corrupt){
+  const y=H*.40, fontSz=150;
+  cx.font="900 "+fontSz+"px 'Arial Black',Arial,sans-serif";
+  const gap=14;
+  const widths=[...MOSH].map(ch=>cx.measureText(ch).width);
+  const total=widths.reduce((a,b)=>a+b,0)+gap*(MOSH.length-1);
+  let lx=W/2-total/2;
+  for(let i=0;i<MOSH.length;i++){
+    const landT=LAND[i], cxr=lx+widths[i]/2;
+    lx+=widths[i]+gap;
+    if(t<landT-.55) continue;
+    const p=clamp((t-(landT-.55))/.55,0,1);
+    // ghost trail while flying in, then the letter itself
+    for(let k=3;k>=0;k--){
+      const gp=clamp(p-k*.09,0,1);
+      if(gp<=0) continue;
+      const ease=1-Math.pow(1-gp,3);
+      const scl=6-5*ease;
+      cx.save();
+      const jx = corrupt>0 ? rnd(-14,14)*corrupt : 0;
+      const jy = corrupt>0 ? corrupt*corrupt*rnd(0,40) : 0;
+      cx.translate(cxr+jx, y+jy);
+      cx.scale(scl,scl);
+      cx.rotate((1-ease)*.4*(i%2?1:-1));
+      cx.globalAlpha=(k===0?1:.13)*gp;
+      cx.font="900 "+fontSz+"px 'Arial Black',Arial,sans-serif";
+      cx.textAlign="center"; cx.textBaseline="middle";
+      if(k===0){
+        if(t>5 && t<7.2){ // ident glow pulse
+          cx.shadowColor="rgba(255,220,120,.8)";
+          cx.shadowBlur=18+Math.sin(t*4)*10;
+        }
+        if(corrupt>0){ // chromatic aberration split
+          const off=4+corrupt*14;
+          cx.globalCompositeOperation="lighter";
+          cx.fillStyle="rgba(255,0,60,.5)"; cx.fillText(MOSH[i],-off,0);
+          cx.fillStyle="rgba(0,90,255,.5)"; cx.fillText(MOSH[i],off,0);
+          cx.globalCompositeOperation="source-over";
+        }
+        cx.fillStyle=chromeGrad(-fontSz/2,fontSz/2,corrupt);
+        cx.fillText(MOSH[i],0,0);
+        cx.shadowBlur=0;
+        cx.lineWidth=2.5;
+        cx.strokeStyle="rgba(255,255,255,"+(0.35*(1-corrupt))+")";
+        cx.strokeText(MOSH[i],0,0);
+      } else {
+        cx.fillStyle="rgba(160,200,255,.5)";
+        cx.fillText(MOSH[i],0,0);
+      }
+      cx.restore();
+    }
+    // landing shockwave ring
+    const ra=t-landT;
+    if(ra>0 && ra<.5){
+      cx.save();
+      cx.globalAlpha=(1-ra*2)*.6;
+      cx.strokeStyle="#cfe6ff"; cx.lineWidth=3;
+      cx.beginPath(); cx.arc(cxr,y,ra*300,0,7); cx.stroke();
+      cx.restore();
+    }
+  }
+  cx.globalAlpha=1;
+}
+function drawStudio(t){
+  cx.fillStyle="#000"; cx.fillRect(0,0,W,H);
+  if(t<1.5){ // phase 1 — the tape loads
+    if(Math.random()<.3) trackingLines(.5);
+    text("PLAY ▶",34,30,20,"#ddd");
+    text("SP 0:00:0"+Math.floor(t*2),34,60,16,"#9c9");
+    if(t>.8&&t<1.35){
+      cx.fillStyle="#000a4a"; cx.fillRect(W/2-180,H/2-50,360,100);
+      text("MOSH VIDEO",W/2,H/2-28,34,"#fff","center");
+      text("HI-FI STEREO",W/2,H/2+16,14,"#9ab","center");
+    }
+    drawGrain(.08);
+    return;
+  }
+  const corrupt=clamp((t-7.2)/2.0,0,1);
+  // backdrop glow
+  const bg=cx.createRadialGradient(W/2,H*.42,20,W/2,H*.42,430);
+  if(corrupt<.5){
+    bg.addColorStop(0,"#1c2a4a"); bg.addColorStop(.6,"#0a1022"); bg.addColorStop(1,"#020308");
+  } else {
+    bg.addColorStop(0,"#12291a"); bg.addColorStop(.6,"#06120a"); bg.addColorStop(1,"#010302");
+  }
+  cx.fillStyle=bg; cx.fillRect(0,0,W,H);
+  // rotating sunrays
+  const rayA=clamp(t-1.5,0,1)*.10*(1-corrupt);
+  if(rayA>0){
+    cx.save();
+    cx.translate(W/2,H*.42); cx.rotate(t*.15);
+    for(let i=0;i<24;i++){
+      cx.rotate(Math.PI/12);
+      if(i%2) continue;
+      cx.fillStyle="rgba(140,110,50,"+rayA+")";
+      cx.beginPath(); cx.moveTo(0,0); cx.arc(0,0,520,0,Math.PI/12); cx.closePath(); cx.fill();
+    }
+    cx.restore();
+  }
+  // orbiting sparkles
+  if(t>1.8){
+    for(let i=0;i<36;i++){
+      const a0=i*1.71+t*(.3+(i%5)*.06), r=150+((i*53)%180);
+      const sx=W/2+Math.cos(a0)*r*1.25, sy=H*.42+Math.sin(a0)*r*.55;
+      const twk=Math.max(0,Math.sin(t*3+i*2.7));
+      cx.globalAlpha=twk*.7*(1-corrupt)*clamp(t-1.8,0,1);
+      cx.strokeStyle="#fff"; cx.lineWidth=1.4;
+      const l=3+twk*5;
+      cx.beginPath(); cx.moveTo(sx-l,sy); cx.lineTo(sx+l,sy);
+      cx.moveTo(sx,sy-l); cx.lineTo(sx,sy+l); cx.stroke();
+    }
+    cx.globalAlpha=1;
+  }
+  drawMoshLogo(t,corrupt);
+  // lens-flare sweep across the letters
+  if(t>4.2&&t<5.05){
+    const p=(t-4.2)/.85, sx=lerp(-80,W+80,p);
+    cx.save();
+    cx.globalCompositeOperation="lighter";
+    const fg=cx.createRadialGradient(sx,H*.40,0,sx,H*.40,120);
+    fg.addColorStop(0,"rgba(255,255,255,.85)");
+    fg.addColorStop(.3,"rgba(255,240,200,.3)");
+    fg.addColorStop(1,"rgba(255,255,255,0)");
+    cx.fillStyle=fg; cx.fillRect(sx-120,H*.40-120,240,240);
+    cx.fillStyle="rgba(255,255,255,.25)"; cx.fillRect(0,H*.40-2,W,4);
+    cx.restore();
+  }
+  // phase 3 — ident text
+  if(t>5){
+    const a=clamp((t-5)/.8,0,1)*(1-corrupt);
+    cx.globalAlpha=a;
+    text("M O S H   P R O D U C T I O N   S T U D I O", W/2, H*.62, 22, "#e8d9a8","center");
+    cx.globalAlpha=a*(.6+Math.sin(t*2.2)*.4);
+    text("· P R E S E N T S ·", W/2, H*.70, 15, "#b8a878","center");
+    cx.globalAlpha=1;
+  }
+  // phase 4 — the logo fails
+  if(corrupt>0){
+    for(let i=0;i<20;i++){ // vertical melt slices
+      const sx=ri(0,W-20), w=ri(4,20);
+      cx.drawImage(cv, sx,0,w,H, sx,rnd(0,60)*corrupt,w,H);
+    }
+    trackingLines(corrupt);
+    if(t>8.45&&t<8.6) drawScareFace(.25); // two-frame subliminal
+    if(t>8.8) drawStatic(clamp((t-8.8)*1.6,0,1),3);
+  }
+  drawGrain(.04);
 }
 
 /* ---------- channel renderers ---------- */
@@ -526,13 +1121,25 @@ function chCamera(name, seed){
     cx.fillStyle="#050805"; cx.fillRect(W*.44,H*.42,W*.12,H*.38); // dark doorway
     for(let i=0;i<3;i++){ cx.fillStyle="#0a100a"; cx.fillRect(60+i*40,H*.3,14,H*.5); }
   }
-  // entity lurks on cameras as threat rises (independent of anomalies — set dressing)
   const hour=gameMin/60;
+  // eyes open in the dark doorway
+  if(seed===4 && hour>1) drawWatcher(W*.5, H*.55, 1+Math.floor(hour), threat);
+  // the Tall One lurks; later it stands far too close to the lens
   if(hour>1.5 && Math.sin(performance.now()/4000+seed*7)>.55){
     const prog=clamp((hour-1.5)/4.5,0,1);
     drawFigure(seed===3? 520-prog*180 : W*.5, seed===3? 300 : H*.55, .35+prog*.5, .55+prog*.35);
   }
+  if(hour>2.5 && Math.sin(performance.now()/9000+seed*3)>.88){
+    drawFigure(seed===3?150:W*.62, H*.9, 1.7, .85);
+  }
+  // the crawler skitters through in stop motion
+  if(hour>2 && Math.sin(performance.now()/7000+seed*5)>.7){
+    const cxr=((performance.now()/28)%(W+360))-180;
+    drawCrawler(cxr, H*.86, .9);
+  }
   text("CAM "+(seed===3?"A — LOT":"B — HALL"), 24, H-40, 16, "#9f9");
+  const wrongDate = hour>2 && Math.random()<.015;
+  if(wrongDate) text("OCT 3 1987", 24, H-64, 14, "#f55");
   text("REC ●", W-110, 24, 16, (Math.floor(performance.now()/500)%2)?"#f44":"#933");
   drawGrain(.10);
 }
@@ -544,22 +1151,43 @@ function chButtons(tNow){
   // sun
   cx.fillStyle=bad?"#402028":"#ffe680";
   cx.beginPath(); cx.arc(80,80,44,0,7); cx.fill();
+  if(bad) drawWatcher(80,80,3,threat); // eyes open inside the dead sun
+  // rare 1-frame closeup: his head fills the screen
+  if(bad && Math.random()<.006){
+    cx.fillStyle="#3d2a30";
+    cx.beginPath(); cx.arc(W/2,H/2,H*.62,0,7); cx.fill();
+    cx.fillStyle="#000";
+    cx.beginPath(); cx.arc(W/2-90,H/2-40,52,0,7); cx.fill();
+    cx.beginPath(); cx.arc(W/2+90,H/2-40,52,0,7); cx.fill();
+    cx.fillStyle="#fff";
+    cx.fillRect(W/2-96,H/2-46,8,8); cx.fillRect(W/2+84,H/2-46,8,8);
+    cx.strokeStyle="#000"; cx.lineWidth=10;
+    cx.beginPath(); cx.moveTo(W/2-120,H/2+110); cx.lineTo(W/2+120,H/2+96); cx.stroke();
+    text("clap", W/2, H-70, 30, "#e55","center");
+    return;
+  }
   // Mr. Buttons: round mascot
   const bounce=bad?0:Math.abs(Math.sin(tNow*3))*18;
   const mx=W/2, my=H*.62-bounce;
+  // when corrupted, his head no longer sits on his body
+  const headFloat=bad? Math.sin(performance.now()/900)*10-8 : 0;
   cx.fillStyle=bad?"#3d2a30":"#e8a33d";
   cx.beginPath(); cx.arc(mx,my,86,0,7); cx.fill();          // body
-  cx.beginPath(); cx.arc(mx,my-110,54,0,7); cx.fill();      // head
+  cx.beginPath(); cx.arc(mx,my-110+headFloat,54,0,7); cx.fill();  // head
+  if(bad){ // the dark gap where a neck should be
+    cx.fillStyle="#0a0508";
+    cx.fillRect(mx-16,my-70,32,10);
+  }
   // eyes — buttons
   cx.fillStyle=bad?"#000":"#222";
-  const eyeY=my-120, look=bad?((performance.now()/700)%2<1?-10:10):0;
+  const eyeY=my-120+headFloat, look=bad?((performance.now()/700)%2<1?-10:10):0;
   cx.beginPath(); cx.arc(mx-20+look,eyeY,bad?14:8,0,7); cx.fill();
   cx.beginPath(); cx.arc(mx+20+look,eyeY,bad?14:8,0,7); cx.fill();
   if(bad){ cx.fillStyle="#fff"; cx.fillRect(mx-22+look,eyeY-2,3,3); cx.fillRect(mx+18+look,eyeY-2,3,3); }
   // mouth
   cx.strokeStyle=bad?"#000":"#222"; cx.lineWidth=4;
   cx.beginPath();
-  if(bad){ cx.moveTo(mx-26,my-88); cx.lineTo(mx+26,my-96); }   // flat, wrong
+  if(bad){ cx.moveTo(mx-26,my-88+headFloat); cx.lineTo(mx+26,my-96+headFloat); }   // flat, wrong
   else cx.arc(mx,my-100,24,.15*Math.PI,.85*Math.PI);
   cx.stroke();
   text(bad?"mr. buttons' playhouse":"MR. BUTTONS' PLAYHOUSE", W/2, 30, 24, bad?"#733":"#fff","center");
@@ -578,21 +1206,35 @@ function drawGrain(a){
 }
 
 /* ---------- screens ---------- */
+function drawBoot(tNow){
+  cx.fillStyle="#000"; cx.fillRect(0,0,W,H);
+  drawGrain(.06);
+  if(Math.random()<.1) trackingLines(.3);
+  cx.fillStyle="#000a4a"; cx.fillRect(W/2-190,H*.36,380,72);
+  text("MOSH VIDEO CASSETTE", W/2, H*.36+24, 22, "#fff","center");
+  if(Math.floor(tNow*1.3)%2===0)
+    text("⏵ INSERT TAPE — PRESS ANY KEY", W/2, H*.62, 20, "#9c9","center");
+  text("headphones · lights off · fullscreen", W/2, H*.72, 13, "#565","center");
+}
 function drawMenu(tNow){
   drawStatic(.18,4);
   cx.fillStyle="rgba(0,0,0,.72)"; cx.fillRect(0,0,W,H);
-  text("W K R X - T V", W/2, 90, 30, "#9f9", "center");
-  text("D E A D   A I R", W/2, 150, 52, "#dfd", "center");
-  text("overnight master control — shift 12:00 AM → 6:00 AM", W/2, 226, 16, "#8a8", "center");
+  text("W K R X - T V", W/2, 76, 30, "#9f9", "center");
+  text("D E A D   A I R", W/2, 132, 52, "#dfd", "center");
+  text("overnight master control — shift 12:00 AM → 6:00 AM", W/2, 206, 16, "#8a8", "center");
   const rules=[
     "1–6 ......... switch channel",
-    "SPACE ....... hold to re-track a corrupted channel",
-    "E ........... answer the phone (if it rings)",
+    "SPACE ....... hold to re-track a corrupted feed",
+    "E ........... answer the phone — or don't",
     "",
-    "three containment failures and it reaches master control.",
+    "some things must NOT be watched. look away.",
+    "three failures and it reaches master control.",
   ];
-  rules.forEach((r,i)=>text(r, W/2-190, 280+i*26, 16, "#bdb"));
+  rules.forEach((r,i)=>text(r, W/2-210, 254+i*26, 16, "#bdb"));
+  const g=loadLastGrade();
+  if(g) text("LAST SHIFT GRADE: "+g, W/2, H-108, 16, g==="F"?"#f66":"#ff8","center");
   if(Math.floor(tNow*1.4)%2===0) text("— PRESS ANY KEY TO CLOCK IN —", W/2, H-64, 20, "#ff8", "center");
+  text("a MOSH production", W/2, H-30, 12, "#575","center");
 }
 function drawIntro(tNow){
   cx.fillStyle="#000"; cx.fillRect(0,0,W,H);
@@ -607,14 +1249,17 @@ function drawIntro(tNow){
     "If a channel degrades: tune to it and HOLD SPACE",
     "until tracking is restored.",
     "",
-    "Do not study what appears in the interference.",
-    "Do not answer questions asked through the set.",
+    "If the interference WATCHES BACK: cut away.",
+    "Attention feeds it. Starve it and it settles.",
     "",
-    "The previous operator did.",
+    "After midnight the phone may ring.",
+    "Not every caller is staff. Listen to the ring.",
+    "",
+    "The previous operator stopped listening.",
   ];
-  const shown=Math.min(lines.length, Math.floor(tNow*2.4));
-  for(let i=0;i<shown;i++) text(lines[i], 60, 60+i*26, 17, i>=10?"#e88":"#9d9");
-  if(tNow>2) text("press any key to begin the shift", W/2, H-44, 15, "#886","center");
+  const shown=Math.min(lines.length, Math.floor(tNow*2.8));
+  for(let i=0;i<shown;i++) text(lines[i], 60, 44+i*24, 16, i>=10?"#e88":"#9d9");
+  if(tNow>1.5) text("press any key to begin the shift", W/2, H-40, 15, "#886","center");
   drawGrain(.05);
 }
 function drawEAS(tNow){
@@ -644,9 +1289,11 @@ function drawDead(tNow){
   cx.fillStyle="#000"; cx.fillRect(0,0,W,H);
   if(tNow<1.2){ drawStatic(1,2); return; }
   drawStatic(.06,4);
-  text("SIGNAL LOST", W/2, 150, 44, "#f44", "center");
-  text("OPERATOR #7 — SHIFT TERMINATED "+fmtClock(), W/2, 230, 18, "#a66","center");
-  text("the tape keeps recording", W/2, 280, 15, "#644","center");
+  text("SIGNAL LOST", W/2, 130, 44, "#f44", "center");
+  text("OPERATOR #7 — SHIFT TERMINATED "+fmtClock(), W/2, 210, 18, "#a66","center");
+  text("SHIFT GRADE: F", W/2, 252, 22, "#f66","center");
+  text("signal integrity at loss: "+Math.round(integrity)+"%", W/2, 292, 14, "#866","center");
+  text("the tape keeps recording", W/2, 330, 15, "#644","center");
   if(tNow>4 && Math.floor(tNow*1.4)%2===0)
     text("press any key", W/2, H-70, 16, "#886","center");
 }
@@ -657,11 +1304,16 @@ function drawWin(tNow){
   cx.fillStyle="rgba(255,190,120,"+dawn*.5+")";
   cx.beginPath(); cx.arc(W/2,H*.85,120,Math.PI,0); cx.fill();
   cx.fillStyle="#0a0f1a"; cx.fillRect(0,H*.8,W,H*.2);
-  text("6:00 AM — SIGN-ON", W/2, 80, 30, "#ffe","center");
-  text("you kept the signal clean.", W/2, 140, 18, "#dcb","center");
+  text("6:00 AM — SIGN-ON", W/2, 60, 30, "#ffe","center");
+  text("you kept the signal clean.", W/2, 118, 18, "#dcb","center");
+  if(tNow>2.5){
+    text("SHIFT GRADE", W/2, 168, 16, "#aab","center");
+    text(finalGrade, W/2, 192, 64, finalGrade==="S"?"#8f8":"#ffe","center");
+  }
   if(tNow>4){
-    text("shift report filed. containment failures: "+strikes, W/2, 190, 15, "#aab","center");
-    text("see you tomorrow night, operator.", W/2, 240, 17, "#e99","center");
+    text("signal integrity "+Math.round(integrity)+"%   ·   feeds restored "+restoredCount, W/2, 280, 15, "#aab","center");
+    text("failures "+strikes+"/3   ·   "+Math.round(ch6Total)+"s spent on channel six", W/2, 306, 15, "#aab","center");
+    text("see you tomorrow night, operator.", W/2, 344, 17, "#e99","center");
   }
   if(tNow>6){
     // the figure stands in the sunrise, far away. it waited.
@@ -673,7 +1325,41 @@ function drawWin(tNow){
 
 /* ---------- anomaly visual overlays ---------- */
 function drawAnomalyOverlay(a){
-  const sev=clamp(a.age/38,0,1);
+  const sev=clamp(a.age/a.fuse,0,1);
+  if(a.kind==="stare"){
+    // a lidless eye that opens wider the longer you look
+    cx.fillStyle="rgba(0,0,0,"+(.35+sev*.4)+")"; cx.fillRect(0,0,W,H);
+    cx.save(); cx.translate(W/2,H/2);
+    const wdt=200+sev*80, hgt=30+sev*130;
+    cx.fillStyle="#e8e2d4";
+    cx.beginPath(); cx.ellipse(0,0,wdt,hgt,0,0,7); cx.fill();
+    cx.strokeStyle="rgba(160,40,40,.5)"; cx.lineWidth=1.5;
+    for(let i=0;i<8;i++){
+      cx.beginPath();
+      cx.moveTo((i%2?-1:1)*wdt, rnd(-hgt*.4,hgt*.4));
+      cx.quadraticCurveTo(rnd(-80,80),rnd(-20,20), rnd(-60,60),rnd(-10,10));
+      cx.stroke();
+    }
+    cx.fillStyle="#3a3320";
+    cx.beginPath(); cx.arc(0,0,Math.min(hgt*.85,74),0,7); cx.fill();
+    cx.fillStyle="#000";
+    cx.beginPath(); cx.arc(0,0,Math.min(hgt*.5,40)*(0.7+Math.sin(performance.now()/900)*.1),0,7); cx.fill();
+    cx.fillStyle="#fff"; cx.fillRect(-hgt*.2,-hgt*.25,4,4);
+    cx.restore();
+    if(Math.floor(performance.now()/400)%2===0)
+      text("IT SEES YOU — LOOK AWAY", W/2, 60, 24, "#f44","center");
+    trackingLines(.15+sev*.5);
+    return;
+  }
+  if(a.kind==="surge"){
+    trackingLines(.8+sev*.5);
+    if(Math.random()<.5) drawStatic(.35,3);
+    const pulse=.4+Math.abs(Math.sin(performance.now()/120))*.5;
+    cx.strokeStyle="rgba(255,40,40,"+pulse+")"; cx.lineWidth=10;
+    cx.strokeRect(5,5,W-10,H-10);
+    text("⚠ SURGE — "+Math.max(0,a.fuse-a.age).toFixed(0)+"s", W/2, 50, 30, "#f44","center");
+    return;
+  }
   if(a.kind==="invert"){
     cx.save(); cx.globalCompositeOperation="difference";
     cx.fillStyle="rgba(255,255,255,"+(.25+sev*.6)+")"; cx.fillRect(0,0,W,H);
@@ -708,32 +1394,42 @@ function frame(now){
   if(subT>0){ subT-=dt; if(subT<=0) sub=""; }
   noiseBurst=Math.max(0,noiseBurst-dt*2.2);
   shake=Math.max(0,shake-dt*1.8);
+  sublimT=Math.max(0,sublimT-dt);
 
   cx.save();
   if(shake>0) cx.translate(rnd(-8,8)*shake, rnd(-6,6)*shake);
 
   switch(state){
+    case ST.BOOT: drawBoot(tNow); break;
+    case ST.STUDIO:
+      drawStudio(stateT);
+      if(stateT>STUDIO_LEN) endStudio();
+      break;
     case ST.MENU: drawMenu(tNow); break;
     case ST.INTRO: drawIntro(stateT); break;
     case ST.EAS:
       gameMin+=dt; drawEAS(stateT);
       if(stateT>13){ state=ST.PLAY; easTone(false); say("…resuming normal programming.",3); }
       break;
-    case ST.PHONE:
-      gameMin+=dt;
-      drawPlayChannel(tNow);
-      if(phoneRingT>=0){
-        phoneRingT+=dt;
-        if(phoneRingT%2<dt) phoneRingTone();
-        text("☎ LINE 1  —  press E", W/2, 40, 22, (Math.floor(tNow*2)%2)?"#ff6":"#a84", "center");
-        if(phoneRingT>16){ phoneRingT=-1; state=ST.PLAY; say("the ringing stopped by itself.",4); addLog(fmtClock()+" CALL ABANDONED"); }
-      }
-      break;
     case ST.PLAY:
       gameMin+=dt;
       anomalyTick(dt);
+      if(state!==ST.PLAY) break; // a strike may have triggered the scare
       scriptTick();
+      if(state!==ST.PLAY) break;
       drawPlayChannel(tNow);
+      // the phone, if it's ringing
+      if(phoneRingT>=0){
+        const evil=CALLS[activeCall].evil;
+        phoneRingT+=dt;
+        if(phoneRingT%2<dt) (evil?evilRingTone():phoneRingTone());
+        const label = evil ? "☎ L̸INE 1  —  press E" : "☎ LINE 1  —  press E";
+        text(label, W/2, 40, 22,
+          (Math.floor(tNow*2)%2) ? (evil?"#f66":"#ff6") : "#a84", "center");
+        if(phoneRingT>14) missCall();
+      }
+      // subliminal flash frame
+      if(sublimT>0) drawScareFace(.2);
       break;
     case ST.SCARE:
       scareT+=dt; drawScareFace(scareT);
@@ -748,20 +1444,30 @@ function frame(now){
   cx.restore();
 
   // OSD text
-  if(state===ST.PLAY||state===ST.PHONE||state===ST.EAS){
+  if(state===ST.PLAY||state===ST.EAS){
     const anomCount=Object.keys(anomalies).length;
-    osd.textContent="CH "+(state===ST.EAS?"—":channel)+"  SP"
+    osd.textContent=corruptStr(
+      "CH "+(state===ST.EAS?"—":channel)+"  SIG "+Math.round(integrity)+"%"
       +(anomCount? "\nINTRUSION×"+anomCount : "")
-      +(strikes? "\nFAIL "+strikes+"/3":"");
-    osdclock.textContent=fmtClock();
+      +(strikes? "\nFAIL "+strikes+"/3":""));
+    osdclock.textContent=corruptStr(fmtClock());
   } else { osd.textContent=""; osdclock.textContent=""; }
   subEl.textContent=sub;
-  trackEl.textContent = (tracking && state===ST.PLAY)
-    ? "TRACKING ["+("█".repeat(Math.floor(trackProgress*20)).padEnd(20,"░"))+"]"
-    : (anomalies[channel] && state===ST.PLAY ? "HOLD SPACE TO RE-TRACK" : "");
+  let trackMsg="";
+  if(state===ST.PLAY){
+    const a=anomalies[channel];
+    if(a && a.resp==="stare") trackMsg="⚠ DO NOT OBSERVE — LOOK AWAY ⚠";
+    else if(tracking && a) trackMsg = slipT>0
+      ? "TRACKING [ SLIPPING ]"
+      : "TRACKING ["+("█".repeat(Math.floor(trackProgress*20)).padEnd(20,"░"))+"]";
+    else if(a) trackMsg = a.kind==="surge"
+      ? "⚠ SURGE — HOLD SPACE — "+Math.max(0,a.fuse-a.age).toFixed(0)+"s"
+      : "HOLD SPACE TO RE-TRACK";
+  }
+  trackEl.textContent=trackMsg;
 
-  // ambient flicker
-  if(Math.random()<.02) flickerEl.style.opacity=rnd(0,.05);
+  // ambient flicker rises with the threat
+  if(Math.random()<.02+threat*.02) flickerEl.style.opacity=rnd(0,.05+threat*.04);
 
   requestAnimationFrame(frame);
 }
@@ -775,20 +1481,36 @@ function drawPlayChannel(tNow){
     case 6:
       drawStatic(1,3);
       // channel six is where the last operator went
-      if(gameMin>150 && Math.random()<.06){
-        cx.fillStyle="rgba(0,0,0,.55)"; cx.fillRect(0,0,W,H);
-        drawFigure(W/2,H*.6,1.1,.8);
-        if(Math.random()<.3) text("HELLO OPERATOR", W/2, 80, 30, "rgba(255,255,255,.5)","center");
+      if(gameMin>90){
+        cx.fillStyle="rgba(0,0,0,.45)"; cx.fillRect(0,0,W,H);
+        // he turns to face you a little more every hour
+        const opFacing=clamp((gameMin-120)/240,0,1);
+        drawFigure(W/2, H*.62, 1.05, .75, opFacing);
+        if(opFacing>.85 && Math.random()<.008) say("he sees you seeing him.",3);
       }
+      if(gameMin>150 && Math.random()<.03)
+        text("HELLO OPERATOR", W/2, 80, 30, "rgba(255,255,255,.5)","center");
+      // the intel trade: stare into the static long enough and it names the next channel
+      if(ch6WatchT>3)
+        text("…c h a n n e l  "+nextTarget+"…", W/2, 130, 24, "rgba(200,255,200,"+clamp((ch6WatchT-3)/2,0,.45)+")","center");
       break;
   }
   if(anomalies[channel]) drawAnomalyOverlay(anomalies[channel]);
   // ambient wear: late-night degradation everywhere
   const hour=gameMin/60;
-  if(hour>2) trackingLines(clamp((hour-2)/8,.05,.4));
+  if(hour>2) trackingLines(clamp((hour-2)/8,.05,.4)+threat*.1);
   drawGrain(.04+threat*.05);
 }
 requestAnimationFrame(frame);
+
+/* debug hook for automated testing (harmless in play) */
+window.__dbg={
+  get state(){return state;},
+  ff:m=>{gameMin=m;},
+  get min(){return gameMin;},
+  get threat(){return threat;},
+  get integrity(){return integrity;},
+};
 </script>
 </body>
 </html>
